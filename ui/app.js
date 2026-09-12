@@ -78,7 +78,7 @@ function render(payload) {
   results.hidden = false;
   count.textContent = entries.length;
   rawJson.textContent = JSON.stringify(entries, null, 2);
-  verdictTitle.textContent = payload.agent_mode.includes('OpenAI') ? 'ShruTea is in the session' : 'Local session verdict';
+  verdictTitle.textContent = 'ShruTea is in the session';
   verdictCopy.textContent = payload.verdict;
   agentMode.textContent = payload.agent_mode;
   reaperPlan.textContent = entries.length ? entries.length + ' marker' + (entries.length === 1 ? '' : 's') + ' ready for REAPER' : 'No drift markers needed';

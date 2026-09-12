@@ -43,7 +43,7 @@
         </div>
         <label>Chord progression <input id="chords" value="Am · F · C · G"></label>
         <label>Vocal style <input id="vocal-style" value="Heavy / gritty"></label>
-        <p class="context">Pitch drift always runs locally using <code>drift.py</code>. With <code>OPENAI_API_KEY</code>, an 8-second temporary excerpt also supplies a transcript and structured vocal coaching.</p>
+        <p class="context">ShruTea runs locally using <code>drift.py</code>: it reads the intended melody, measures pitch drift, builds a coaching plan, and sends named actions to REAPER. No API key is needed.</p>
         <button id="analyze" class="primary" disabled>Analyze this take <span>→</span></button>
         <p id="status" class="status" aria-live="polite">Select a WAV or try the included demo take.</p>
       </div>

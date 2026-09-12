@@ -126,10 +126,10 @@ def local_feedback(verdict: str, results: list[dict[str, Any]]) -> dict[str, Any
             "Use REAPER markers only if a later phrase crosses the 20-cent threshold.",
         ]
     return {
-        "headline": "Measured local coaching",
+        "headline": "Local pitch-coach plan",
         "summary": f"{verdict} {note_detail}",
-        "rhyme_scheme": "Add OPENAI_API_KEY to transcribe lyrics",
-        "rhyme_feedback": "The local pitch tracker intentionally does not infer lyrics from audio.",
+        "rhyme_scheme": "Pitch-only REAPER session",
+        "rhyme_feedback": "Local mode stays honest: it analyzes measured pitch and reference intent, not unverified lyric transcription.",
         "melody_feedback": melody_feedback,
         "vibrato_feedback": "Pitch windows are measured before making any claim about vocal vibrato.",
         "practice_steps": practice,
@@ -266,8 +266,8 @@ def analyze_take(
             "verdict": verdict,
             "reference_sequence": REFERENCE_SEQUENCE,
             "analysis_window_seconds": UI_ANALYSIS_SECONDS,
-            "agent_mode": "Local evidence-based coaching fallback",
-            "transcript": "Transcript is available when OPENAI_API_KEY is configured.",
+            "agent_mode": "Local ShruTea agent — no cloud required",
+            "transcript": "Not collected. This local-only session analyzes vocal pitch, reference intent, and REAPER marker actions.",
             "feedback": local_feedback(verdict, results),
         }
         if not os.environ.get("OPENAI_API_KEY"):
