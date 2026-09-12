@@ -14,8 +14,8 @@ import json
 import sys
 from pathlib import Path
 
+import librosa
 import numpy as np
-from scipy import signal
 from scipy.io import wavfile
 
 
@@ -54,59 +54,38 @@ def prepare_audio(samples: np.ndarray) -> np.ndarray:
     return samples.astype(np.float64)
 
 
-def estimate_frequency(frame: np.ndarray, sample_rate: int, low_hz: float = 80.0, high_hz: float = 1000.0) -> float | None:
-    """Estimate a voiced frame's fundamental with normalized autocorrelation."""
-    frame = frame - np.mean(frame)
-    if np.sqrt(np.mean(frame * frame)) < 1e-4:
-        return None
-
-    windowed = frame * np.hanning(len(frame))
-    correlation = signal.correlate(windowed, windowed, mode="full", method="fft")[len(frame) - 1 :]
-    if correlation[0] <= 0:
-        return None
-    correlation /= correlation[0]
-
-    minimum_lag = max(1, int(sample_rate / high_hz))
-    maximum_lag = min(len(correlation) - 2, int(sample_rate / low_hz))
-    if minimum_lag >= maximum_lag:
-        return None
-
-    # Choosing the strongest local maximum after the zero-lag peak avoids the
-    # zero-lag artifact and makes the detector stable for a clean sine tone.
-    peaks, _ = signal.find_peaks(correlation[minimum_lag : maximum_lag + 1])
-    if not len(peaks):
-        return None
-    lag = int(peaks[np.argmax(correlation[minimum_lag : maximum_lag + 1][peaks])]) + minimum_lag
-    if correlation[lag] < 0.2:
-        return None
-
-    # Parabolic interpolation improves the cents estimate beyond whole samples.
-    left, center, right = correlation[lag - 1], correlation[lag], correlation[lag + 1]
-    denominator = left - 2 * center + right
-    fractional_lag = lag if denominator == 0 else lag + 0.5 * (left - right) / denominator
-    return float(sample_rate / fractional_lag)
-
-
-def analyze(wav_path: Path, frame_seconds: float = 0.20, hop_seconds: float = 0.20) -> list[dict[str, float | str]]:
+def analyze(wav_path: Path) -> list[dict[str, float | str]]:
     sample_rate, raw_samples = wavfile.read(wav_path)
     if sample_rate <= 0:
         raise ValueError("WAV has an invalid sample rate")
     samples = prepare_audio(raw_samples)
-    frame_size = max(3, int(round(sample_rate * frame_seconds)))
-    hop_size = max(1, int(round(sample_rate * hop_seconds)))
-    if len(samples) < frame_size:
+    # pyin's probability lattice requires the standard 2048-sample analysis
+    # frame at this vocal pitch range. Analyze densely, then take one median
+    # pitch per reference-note window below.
+    frame_size = 2048
+    hop_size = 512
+    if len(samples) < 2048:
         raise ValueError("WAV is shorter than the analysis frame")
 
+    # pyin returns one fundamental-frequency estimate per frame, with unvoiced
+    # frames represented as NaN. It is suitable for a monophonic vocal line.
+    pitches, _, _ = librosa.pyin(
+        samples,
+        fmin=librosa.note_to_hz("E2"),
+        fmax=librosa.note_to_hz("C6"),
+        sr=sample_rate,
+        frame_length=frame_size,
+        hop_length=hop_size,
+    )
+    timestamps = librosa.times_like(pitches, sr=sample_rate, hop_length=hop_size)
     results: list[dict[str, float | str]] = []
-    for start in range(0, len(samples) - frame_size + 1, hop_size):
-        timestamp = (start + frame_size / 2) / sample_rate
-        reference = reference_at(timestamp)
-        if reference is None:
+    for index, (start_time, expected_note, reference_frequency) in enumerate(REFERENCE_SEQUENCE):
+        end_time = REFERENCE_SEQUENCE[index + 1][0] if index + 1 < len(REFERENCE_SEQUENCE) else np.inf
+        in_window = (timestamps >= start_time) & (timestamps < end_time)
+        voiced_pitches = pitches[in_window & ~np.isnan(pitches)]
+        if not len(voiced_pitches):
             continue
-        frequency = estimate_frequency(samples[start : start + frame_size], sample_rate)
-        if frequency is None:
-            continue
-        expected_note, reference_frequency = reference
+        frequency = float(np.median(voiced_pitches))
         midi_float = 69 + 12 * np.log2(frequency / 440.0)
         nearest_midi = int(np.rint(midi_float))
         cents_off = abs(float(1200 * np.log2(frequency / reference_frequency)))
@@ -114,7 +93,7 @@ def analyze(wav_path: Path, frame_seconds: float = 0.20, hop_seconds: float = 0.
             continue
         results.append(
             {
-                "time": round(timestamp, 4),
+                "time": round(float(start_time), 4),
                 "expected_note": expected_note,
                 "actual_note": midi_to_note(nearest_midi),
                 "cents_off": round(cents_off, 2),
