@@ -189,7 +189,7 @@ local markers_added = 0
 for _, entry in ipairs(entries) do
   local cents_off = tonumber(entry.cents_off)
   local timestamp = tonumber(entry.timestamp or entry.time or entry.time_seconds)
-  local note_name = entry.note_name or entry.note or "Unknown note"
+  local note_name = entry.actual_note or entry.expected_note or entry.note_name or entry.note or "Unknown note"
   if cents_off and timestamp and cents_off > 20 then
     local label = string.format("%s: %.1f cents off", tostring(note_name), cents_off)
     -- AddProjectMarker2 adds a non-region marker to the current project at timestamp.
