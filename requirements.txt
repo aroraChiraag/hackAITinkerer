@@ -1,7 +1,8 @@
 numpy>=1.24,<2.1
 scipy>=1.10
 librosa==0.10.2.post1
-numba==0.60.0
-llvmlite==0.43.0
+# Numba 0.61+ supports Python 3.13; 0.60 is limited to Python <3.13.
+numba>=0.61,<0.63
+llvmlite>=0.44,<0.46
 openai>=1.0.0
 python-dotenv>=1.0.0
