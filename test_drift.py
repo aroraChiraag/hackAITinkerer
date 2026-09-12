@@ -49,7 +49,9 @@ def main() -> None:
 
         assert intune_output == [], f"440 Hz should be filtered out: {intune_output}"
         assert flat_output, "427 Hz should produce drift entries"
-        assert all(45 <= float(entry["cents_off"]) <= 55 for entry in flat_output), flat_output
+        assert all(entry["expected_note"] == "A4" for entry in flat_output), flat_output
+        assert all(entry["actual_note"] == "G#4" for entry in flat_output), flat_output
+        assert all(50 <= float(entry["cents_off"]) <= 54 for entry in flat_output), flat_output
 
         print("test_intune.wav JSON:")
         print(json.dumps(intune_output, indent=2))

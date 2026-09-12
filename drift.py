@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Report pitch drift from a WAV file as JSON.
 
-Each result compares a detected fundamental frequency with its nearest
-equal-tempered note. The output is deliberately stdout-only JSON so that
-shrutea.lua can redirect and consume it without an additional dependency.
+Each result compares a detected fundamental frequency with the hardcoded
+reference note active at that time. The output is deliberately stdout-only
+JSON so that shrutea.lua can redirect and consume it without an additional
+dependency.
 """
 
 from __future__ import annotations
@@ -20,11 +21,24 @@ from scipy.io import wavfile
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 DRIFT_THRESHOLD_CENTS = 20.0
+# Each entry starts at a time in seconds and remains active until the next one.
+# Add successive notes here to define a longer reference melody.
+REFERENCE_SEQUENCE = ((0.0, "A4", 440.0),)
 
 
 def midi_to_note(midi_note: int) -> str:
     """Return a scientific-pitch-notation note name for a MIDI note number."""
     return f"{NOTE_NAMES[midi_note % 12]}{midi_note // 12 - 1}"
+
+
+def reference_at(timestamp: float) -> tuple[str, float] | None:
+    """Return the hardcoded reference entry that covers ``timestamp``."""
+    active_reference: tuple[str, float] | None = None
+    for start_time, note_name, frequency in REFERENCE_SEQUENCE:
+        if start_time > timestamp:
+            break
+        active_reference = (note_name, frequency)
+    return active_reference
 
 
 def prepare_audio(samples: np.ndarray) -> np.ndarray:
@@ -85,21 +99,24 @@ def analyze(wav_path: Path, frame_seconds: float = 0.20, hop_seconds: float = 0.
 
     results: list[dict[str, float | str]] = []
     for start in range(0, len(samples) - frame_size + 1, hop_size):
+        timestamp = (start + frame_size / 2) / sample_rate
+        reference = reference_at(timestamp)
+        if reference is None:
+            continue
         frequency = estimate_frequency(samples[start : start + frame_size], sample_rate)
         if frequency is None:
             continue
+        expected_note, reference_frequency = reference
         midi_float = 69 + 12 * np.log2(frequency / 440.0)
         nearest_midi = int(np.rint(midi_float))
-        reference_frequency = 440.0 * 2 ** ((nearest_midi - 69) / 12)
         cents_off = abs(float(1200 * np.log2(frequency / reference_frequency)))
         if cents_off <= DRIFT_THRESHOLD_CENTS:
             continue
-        note_name = midi_to_note(nearest_midi)
         results.append(
             {
-                "time": round((start + frame_size / 2) / sample_rate, 4),
-                "expected_note": note_name,
-                "actual_note": note_name,
+                "time": round(timestamp, 4),
+                "expected_note": expected_note,
+                "actual_note": midi_to_note(nearest_midi),
                 "cents_off": round(cents_off, 2),
             }
         )
