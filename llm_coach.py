@@ -101,19 +101,19 @@ def _openrouter_verdict(drift_json: list[dict], reference_sequence: object) -> s
 def coach(drift_json: list[dict], reference_sequence: object) -> str:
     """Return an LLM verdict, falling back within five seconds on any failure."""
     fallback = template_commentary(drift_json, reference_sequence)
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
     direct_key = os.environ.get("ANTHROPIC_API_KEY")
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
     if not openai_key and not direct_key and not openrouter_key:
         return fallback
     try:
         # Both provider implementations set a five-second client/request timeout.
         provider = (
-            _openai_verdict
+            _openrouter_verdict
+            if openrouter_key
+            else _openai_verdict
             if openai_key
             else _claude_verdict
-            if direct_key
-            else _openrouter_verdict
         )
         return provider(drift_json, reference_sequence)
     except Exception:

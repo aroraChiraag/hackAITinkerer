@@ -14,15 +14,19 @@ import cgi
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import certifi
 from scipy.io import wavfile
 
 try:
@@ -43,6 +47,7 @@ DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
 DEMO_AUDIO = REPOSITORY_ROOT / "audio" / "Audio Only.wav"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 UI_ANALYSIS_SECONDS = 8
+DEMO_TRANSCRIPT = "I held my breath, then found my way back home."
 SUPPORTED_INPUT_SUFFIXES = {
     ".flac",
     ".m4a",
@@ -100,6 +105,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from drift import REFERENCE_SEQUENCE  # noqa: E402
+from commentary import template_commentary  # noqa: E402
 from llm_coach import coach  # noqa: E402
 
 
@@ -231,12 +237,72 @@ transcript, and return the requested JSON fields."""
         excerpt_path.unlink(missing_ok=True)
 
 
+def openrouter_verdict(
+    results: list[dict[str, Any]],
+    key: str,
+    chords: str,
+    genre: str,
+    vocal_style: str,
+) -> tuple[str, str]:
+    """Ask a real OpenRouter model for a concise REAPER-aware coaching verdict."""
+    model = os.getenv("SHRUTEA_OPENROUTER_MODEL", "openrouter/free")
+    context = {
+        "reference_sequence": REFERENCE_SEQUENCE,
+        "drift_events": results,
+        "musical_context": {
+            "key": key or "not supplied",
+            "chords": chords or "not supplied",
+            "genre": genre or "not supplied",
+            "vocal_style": vocal_style or "not supplied",
+        },
+    }
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": model,
+                "max_tokens": 160,
+                "temperature": 0.2,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are ShruTea, an embedded vocal coach in a REAPER session. Give one concise, specific coaching verdict grounded only in supplied pitch evidence. Name the actual note and cents value when drift exists. Do not claim to hear lyrics, vibrato, or melody beyond the evidence. No generic encouragement.",
+                    },
+                    {"role": "user", "content": json.dumps(context, separators=(",", ":"))},
+                ],
+            }
+        ).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+            "Content-Type": "application/json",
+            "X-OpenRouter-Title": "ShruTea",
+        },
+        method="POST",
+    )
+    certificate_context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=15, context=certificate_context) as response:
+        payload = json.load(response)
+    content = payload["choices"][0]["message"].get("content")
+    if isinstance(content, list):
+        verdict = "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict)
+        ).strip()
+    else:
+        verdict = str(content or "").strip()
+    if not verdict or verdict.lower() == "none":
+        raise ValueError("OpenRouter returned no coaching text.")
+    return verdict, str(payload.get("model") or model)
+
+
 def analyze_take(
     source_path: Path,
     key: str = "",
     chords: str = "",
     genre: str = "",
     vocal_style: str = "",
+    demo: bool = False,
 ) -> dict[str, Any]:
     """Return local pitch results plus an optional network-enriched coach response."""
     analysis_path = convert_to_wav(source_path)
@@ -260,16 +326,47 @@ def analyze_take(
         results = json.loads(completed.stdout)
         if not isinstance(results, list):
             raise ValueError("drift.py did not return a JSON array.")
-        verdict = coach(results, REFERENCE_SEQUENCE)
+        # The browser's OpenAI route below returns the complete AI verdict.
+        # Avoid paying for a redundant one-line coach call before it runs.
+        uses_cloud_coach = bool(
+            os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        )
+        verdict = (
+            template_commentary(results, REFERENCE_SEQUENCE)
+            if uses_cloud_coach
+            else coach(results, REFERENCE_SEQUENCE)
+        )
         payload: dict[str, Any] = {
             "results": results,
             "verdict": verdict,
             "reference_sequence": REFERENCE_SEQUENCE,
             "analysis_window_seconds": UI_ANALYSIS_SECONDS,
             "agent_mode": "Local ShruTea agent — no cloud required",
-            "transcript": "Not collected. This local-only session analyzes vocal pitch, reference intent, and REAPER marker actions.",
+            "transcript": (
+                DEMO_TRANSCRIPT
+                if demo
+                else "Not collected. This local-only session analyzes vocal pitch, reference intent, and REAPER marker actions."
+            ),
             "feedback": local_feedback(verdict, results),
         }
+        if os.environ.get("OPENROUTER_API_KEY"):
+            try:
+                live_verdict, model = openrouter_verdict(
+                    results, key, chords, genre, vocal_style
+                )
+                live_feedback = local_feedback(live_verdict, results)
+                live_feedback["headline"] = "OpenRouter live vocal coach"
+                live_feedback["summary"] = live_verdict
+                payload.update(
+                    {
+                        "verdict": live_verdict,
+                        "feedback": live_feedback,
+                        "agent_mode": f"OpenRouter live coach ({model})",
+                    }
+                )
+            except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
+                payload["agent_warning"] = f"OpenRouter coaching was unavailable; local drift coaching is still complete. ({error})"
+            return payload
         if not os.environ.get("OPENAI_API_KEY"):
             return payload
         try:
@@ -310,7 +407,10 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "The bundled demo take was not found."})
                 return
             try:
-                self.send_json(HTTPStatus.OK, analyze_take(DEMO_AUDIO, genre="Demo vocal take"))
+                self.send_json(
+                    HTTPStatus.OK,
+                    analyze_take(DEMO_AUDIO, genre="Demo vocal take", demo=True),
+                )
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                 self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"Demo analysis failed: {error}"})
             return
