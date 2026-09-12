@@ -9,6 +9,11 @@ const summary = document.querySelector('#summary');
 const timeline = document.querySelector('#timeline');
 const markerList = document.querySelector('#marker-list');
 const rawJson = document.querySelector('#raw-json');
+const verdictTitle = document.querySelector('#verdict-title');
+const verdictCopy = document.querySelector('#verdict-copy');
+const agentMode = document.querySelector('#agent-mode');
+const referenceNotes = document.querySelector('#reference-notes');
+const reaperPlan = document.querySelector('#reaper-plan');
 
 audioFile.addEventListener('change', () => {
   const file = audioFile.files[0];
@@ -17,10 +22,19 @@ audioFile.addEventListener('change', () => {
   status.textContent = file ? 'Ready to run drift.py locally.' : 'Select a WAV to begin.';
 });
 
-function render(entries) {
+function render(payload) {
+  const entries = payload.results;
   results.hidden = false;
   count.textContent = entries.length;
   rawJson.textContent = JSON.stringify(entries, null, 2);
+  verdictTitle.textContent = entries.length ? 'A specific note to revisit.' : 'A clean pass.';
+  verdictCopy.textContent = payload.verdict;
+  agentMode.textContent = payload.agent_mode;
+  referenceNotes.replaceChildren();
+  payload.reference_sequence.forEach(([time, note]) => {
+    const chip = document.createElement('span'); chip.textContent = `${note} · ${Number(time).toFixed(1)}s`; referenceNotes.append(chip);
+  });
+  reaperPlan.textContent = entries.length ? `${entries.length} marker${entries.length === 1 ? '' : 's'} ready for REAPER` : 'No markers needed';
   timeline.replaceChildren();
   markerList.replaceChildren();
   if (!entries.length) {
@@ -31,7 +45,7 @@ function render(entries) {
   }
   title.textContent = 'Pitch drift markers';
   const lastTime = Math.max(...entries.map(entry => Number(entry.time)), 0.1);
-  summary.textContent = `${entries.length} reference window${entries.length === 1 ? '' : 's'} exceeded the 20¢ threshold. These are the same events the REAPER script marks on its timeline.`;
+  summary.textContent = `${entries.length} reference window${entries.length === 1 ? '' : 's'} exceeded the 20¢ threshold in the first ${payload.analysis_window_seconds} seconds. These are the same events the REAPER script marks on its timeline.`;
   entries.forEach(entry => {
     const point = document.createElement('i');
     point.className = 'warn'; point.style.left = `${8 + 84 * Number(entry.time) / lastTime}%`;
@@ -51,7 +65,7 @@ analyze.addEventListener('click', async () => {
     const response = await fetch('/api/analyze', { method: 'POST', body: form });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || 'Analysis failed.');
-    render(payload.results); status.textContent = 'Analysis complete.'; results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render(payload); status.textContent = 'Analysis complete.'; results.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) { status.textContent = `Could not analyze this take: ${error.message}`; }
   finally { analyze.disabled = false; analyze.innerHTML = 'Analyze this take <span>→</span>'; }
 });

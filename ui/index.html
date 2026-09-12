@@ -22,14 +22,19 @@
       </div>
       <div class="step-card setup-card">
         <p class="step">02 — ANALYZE</p><h2>Compare to your reference</h2>
-        <p class="context">The expected melody comes from <code>REFERENCE_SEQUENCE</code> in <code>drift.py</code>. The current demo reference is A4 at 440 Hz.</p>
+        <p class="context">For a responsive demo this page analyzes the first 8 seconds. The expected melody comes from <code>REFERENCE_SEQUENCE</code> in <code>drift.py</code>. The REAPER script remains full-take.</p>
         <button id="analyze" class="primary" disabled>Analyze this take <span>→</span></button>
         <p id="status" class="status" aria-live="polite">Select a WAV to begin.</p>
       </div>
     </section>
     <section id="results" class="results" hidden aria-live="polite">
       <div class="results-heading"><div><p class="eyebrow">REAL ANALYSIS RESULT</p><h2 id="result-title">Pitch drift markers</h2></div><span class="score"><b id="drift-count">0</b><small>markers</small></span></div>
-      <article class="card drift"><p class="card-label">TIMELINE MARKERS</p><div id="timeline" class="timeline"></div><p id="summary"></p></article>
+      <div class="result-grid">
+        <article class="card verdict"><p class="card-label">SHRUTEA SAYS</p><h3 id="verdict-title">Listening to this take…</h3><p id="verdict-copy">Your REAPER-aware coaching verdict will appear here.</p><div id="agent-mode" class="tag">Awaiting analysis</div></article>
+        <article class="card context-card"><p class="card-label">SESSION CONTEXT</p><h3>Reference melody</h3><p>The agent receives the intended note sequence alongside the detected pitch—not just a WAV in isolation.</p><div id="reference-notes" class="note-chips"></div></article>
+        <article class="card drift"><p class="card-label">TIMELINE MARKERS</p><div id="timeline" class="timeline"></div><p id="summary"></p></article>
+        <article class="card reaper-card"><p class="card-label">REAPER ACTION</p><h3>Markers, not mystery.</h3><p>Each drift event becomes a named marker on the project timeline, so the producer can jump directly to the take that needs work.</p><div id="reaper-plan" class="tag">No markers yet</div></article>
+      </div>
       <div id="marker-list" class="marker-list"></div>
       <details class="raw"><summary>View raw drift.py JSON</summary><pre id="raw-json"></pre></details>
     </section>

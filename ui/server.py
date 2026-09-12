@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import cgi
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,13 @@ UI_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = UI_DIRECTORY.parent
 DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+UI_ANALYSIS_SECONDS = 8
+
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from drift import REFERENCE_SEQUENCE
+from llm_coach import coach
 
 
 class ShruTeaHandler(SimpleHTTPRequestHandler):
@@ -58,7 +66,7 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
             temporary_file.write(upload.file.read())
         try:
             completed = subprocess.run(
-                [sys.executable, str(DRIFT_SCRIPT), str(temporary_path)],
+                [sys.executable, str(DRIFT_SCRIPT), str(temporary_path), "--max-seconds", str(UI_ANALYSIS_SECONDS)],
                 cwd=REPOSITORY_ROOT,
                 capture_output=True,
                 text=True,
@@ -70,7 +78,17 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
             results = json.loads(completed.stdout)
             if not isinstance(results, list):
                 raise ValueError("drift.py did not return a JSON array")
-            self.send_json(HTTPStatus.OK, {"results": results})
+            agent_mode = "Claude via Anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "Claude via OpenRouter" if os.environ.get("OPENROUTER_API_KEY") else "local coaching fallback"
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "results": results,
+                    "verdict": coach(results, REFERENCE_SEQUENCE),
+                    "reference_sequence": REFERENCE_SEQUENCE,
+                    "agent_mode": agent_mode,
+                    "analysis_window_seconds": UI_ANALYSIS_SECONDS,
+                },
+            )
         except (OSError, ValueError, json.JSONDecodeError) as error:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Analysis failed: {error}"})
         finally:
