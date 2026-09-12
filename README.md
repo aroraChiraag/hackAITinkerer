@@ -24,7 +24,7 @@ Install the Python dependencies from this repository:
 python3 -m pip install -r requirements.txt
 ```
 
-`shrutea.lua` calls `python3`. If REAPER says that `python3` cannot be found, replace `python3` in the `command` line of `shrutea.lua` with the absolute path reported by:
+`shrutea.lua` calls `python3` by default. If REAPER says that `python3` cannot be found, set the `SHRUTEA_PYTHON` environment variable to the absolute path reported by:
 
 ```bash
 which python3
@@ -82,6 +82,16 @@ Run it with:
 ```bash
 python3 test_drift.py
 ```
+
+To verify the Lua-to-Python-to-REAPER path locally without opening REAPER, run:
+
+```bash
+lua test_shrutea.lua
+```
+
+Run it from the repository directory after installing the Python requirements. If those dependencies are in a virtual environment, point the test and ReaScript at its interpreter, for example: `SHRUTEA_PYTHON=/path/to/venv/bin/python lua test_shrutea.lua`.
+
+The test generates a temporary flat-tone WAV, loads `mock_reaper.lua`, runs the real `shrutea.lua`, asserts that its Python subprocess JSON was consumed, and prints the marker and console output that REAPER would receive.
 
 ## JSON output
 
