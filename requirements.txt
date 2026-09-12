@@ -2,7 +2,10 @@ numpy>=1.24,<2.1
 scipy>=1.10
 librosa==0.10.2.post1
 # Numba 0.61+ supports Python 3.13; 0.60 is limited to Python <3.13.
+# The selected range also remains usable with the Python 3.11 REAPER setup
+# used by this project.
 numba>=0.61,<0.63
 llvmlite>=0.44,<0.46
+anthropic>=0.49
 openai>=1.0.0
 python-dotenv>=1.0.0

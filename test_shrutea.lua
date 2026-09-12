@@ -28,7 +28,8 @@ assert(ran, "shrutea.lua failed: " .. tostring(run_error))
 assert(#mock_reaper_state.markers == 1, "expected one drift marker")
 local marker = mock_reaper_state.markers[1]
 assert(marker.name:match("G#4: 50%.0 cents off"), "unexpected marker label: " .. marker.name)
-assert(#mock_reaper_state.console == 1, "expected one console summary")
+assert(#mock_reaper_state.console == 2, "expected marker and coaching console summaries")
 assert(mock_reaper_state.console[1]:match("added 1 marker"), "unexpected console output")
+assert(mock_reaper_state.console[2]:match("ShruTea says:"), "expected labeled coaching verdict")
 
 print("[mock verification] Python subprocess, JSON decoding, marker, and console output passed.")

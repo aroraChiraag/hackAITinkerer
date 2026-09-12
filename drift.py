@@ -16,11 +16,11 @@ from pathlib import Path
 
 import librosa
 import numpy as np
-from scipy.io import wavfile
 
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 DRIFT_THRESHOLD_CENTS = 20.0
+MAX_ANALYSIS_SECONDS = 20.0
 # Each entry starts at a time in seconds and remains active until the next one.
 # Add successive notes here to define a longer reference melody.
 REFERENCE_SEQUENCE = ((0.0, "A4", 440.0),)
@@ -41,29 +41,20 @@ def reference_at(timestamp: float) -> tuple[str, float] | None:
     return active_reference
 
 
-def prepare_audio(samples: np.ndarray) -> np.ndarray:
-    """Mix channels and normalize integer or floating WAV samples to floats."""
-    if samples.ndim == 2:
-        samples = samples.mean(axis=1)
-    if samples.ndim != 1:
-        raise ValueError("WAV audio must be mono or stereo")
-
-    if np.issubdtype(samples.dtype, np.integer):
-        scale = max(abs(np.iinfo(samples.dtype).min), np.iinfo(samples.dtype).max)
-        return samples.astype(np.float64) / scale
-    return samples.astype(np.float64)
-
-
-def analyze(wav_path: Path) -> list[dict[str, float | str]]:
-    sample_rate, raw_samples = wavfile.read(wav_path)
+def analyze(wav_path: Path, max_seconds: float | None = None) -> list[dict[str, float | str]]:
+    if max_seconds is not None and max_seconds <= 0:
+        raise ValueError("max_seconds must be positive")
+    duration = min(max_seconds, MAX_ANALYSIS_SECONDS) if max_seconds is not None else MAX_ANALYSIS_SECONDS
+    # Limit input duration at load time so pYIN never blocks a live demo on a
+    # long render. librosa also handles common WAV variants more robustly.
+    samples, sample_rate = librosa.load(wav_path, sr=None, mono=True, duration=duration)
     if sample_rate <= 0:
         raise ValueError("WAV has an invalid sample rate")
-    samples = prepare_audio(raw_samples)
     # pyin's probability lattice requires the standard 2048-sample analysis
     # frame at this vocal pitch range. Analyze densely, then take one median
     # pitch per reference-note window below.
     frame_size = 2048
-    hop_size = 512
+    hop_size = 2048
     if len(samples) < 2048:
         raise ValueError("WAV is shorter than the analysis frame")
 
@@ -71,7 +62,7 @@ def analyze(wav_path: Path) -> list[dict[str, float | str]]:
     # frames represented as NaN. It is suitable for a monophonic vocal line.
     pitches, _, _ = librosa.pyin(
         samples,
-        fmin=librosa.note_to_hz("E2"),
+        fmin=librosa.note_to_hz("C3"),
         fmax=librosa.note_to_hz("C6"),
         sr=sample_rate,
         frame_length=frame_size,
@@ -105,12 +96,13 @@ def analyze(wav_path: Path) -> list[dict[str, float | str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Analyze WAV pitch drift as JSON.")
     parser.add_argument("wav_file", type=Path, help="input WAV file")
+    parser.add_argument("--max-seconds", type=float, help="analyze only the first N seconds")
     args = parser.parse_args()
     if not args.wav_file.is_file():
         parser.error(f"WAV file not found: {args.wav_file}")
 
     try:
-        json.dump(analyze(args.wav_file), sys.stdout)
+        json.dump(analyze(args.wav_file, args.max_seconds), sys.stdout)
         sys.stdout.write("\n")
     except (OSError, ValueError) as error:
         print(f"drift.py: {error}", file=sys.stderr)
