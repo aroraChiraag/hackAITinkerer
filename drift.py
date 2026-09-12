@@ -19,6 +19,7 @@ from scipy.io import wavfile
 
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+DRIFT_THRESHOLD_CENTS = 20.0
 
 
 def midi_to_note(midi_note: int) -> str:
@@ -90,7 +91,9 @@ def analyze(wav_path: Path, frame_seconds: float = 0.20, hop_seconds: float = 0.
         midi_float = 69 + 12 * np.log2(frequency / 440.0)
         nearest_midi = int(np.rint(midi_float))
         reference_frequency = 440.0 * 2 ** ((nearest_midi - 69) / 12)
-        cents_off = float(1200 * np.log2(frequency / reference_frequency))
+        cents_off = abs(float(1200 * np.log2(frequency / reference_frequency)))
+        if cents_off <= DRIFT_THRESHOLD_CENTS:
+            continue
         note_name = midi_to_note(nearest_midi)
         results.append(
             {
