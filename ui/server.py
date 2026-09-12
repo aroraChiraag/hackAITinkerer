@@ -14,11 +14,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from openai import OpenAI, OpenAIError
+from dotenv import load_dotenv
 
 
 UI_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = UI_DIRECTORY.parent
 DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
+load_dotenv(REPOSITORY_ROOT / ".env")
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 TRANSCRIBABLE_SUFFIXES = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv"}
