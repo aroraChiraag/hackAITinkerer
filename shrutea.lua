@@ -8,6 +8,7 @@ local function script_directory()
 end
 
 local DRIFT_SCRIPT = os.getenv("SHRUTEA_DRIFT_SCRIPT") or (script_directory() .. "drift.py")
+local COACH_SCRIPT = os.getenv("SHRUTEA_COACH_SCRIPT") or (script_directory() .. "llm_coach.py")
 
 local function shell_quote(value)
   -- Quote a path for the platform shell. The common Lua/Reaper builds use either
@@ -169,14 +170,15 @@ end
 local file = io.open(output_path, "r")
 local json_text = file and file:read("*a")
 if file then file:close() end
-os.remove(output_path)
 if not json_text or json_text == "" then
+  os.remove(output_path)
   console("Shrutea: drift.py produced no JSON output.")
   return
 end
 
 local decoded_ok, results = pcall(decode_json, json_text)
 if not decoded_ok then
+  os.remove(output_path)
   console("Shrutea: could not parse drift.py JSON: " .. tostring(results))
   return
 end
@@ -184,6 +186,7 @@ end
 -- Permit either a top-level array or an object containing an entries/results array.
 local entries = type(results) == "table" and (results.entries or results.results or results)
 if type(entries) ~= "table" then
+  os.remove(output_path)
   console("Shrutea: JSON must contain an array of pitch entries.")
   return
 end
@@ -202,3 +205,20 @@ for _, entry in ipairs(entries) do
 end
 
 console(string.format("Shrutea: added %d marker(s) for notes more than 20 cents off.", markers_added))
+
+-- Run the context-aware coach after markers are added, then print its verdict
+-- in REAPER's console. llm_coach.py uses Claude when ANTHROPIC_API_KEY is set
+-- and otherwise returns a reliable local template verdict.
+local coach_output_path = os.tmpname() .. ".txt"
+local coach_command = shell_quote(python_command) .. " " .. shell_quote(COACH_SCRIPT) .. " " .. shell_quote(output_path) .. " > " .. shell_quote(coach_output_path)
+local coach_ok = os.execute(coach_command)
+local coach_file = io.open(coach_output_path, "r")
+local verdict = coach_file and coach_file:read("*a") or nil
+if coach_file then coach_file:close() end
+os.remove(output_path)
+os.remove(coach_output_path)
+if (coach_ok == true or coach_ok == 0) and verdict and verdict:match("%S") then
+  console("ShruTea says: " .. verdict:gsub("%s+$", ""))
+else
+  console("ShruTea says: Pitch analysis is complete; coaching verdict unavailable.")
+end

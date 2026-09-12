@@ -108,6 +108,12 @@ The test generates a temporary flat-tone WAV, loads `mock_reaper.lua`, runs the 
 ]
 ```
 
+## Embedded coaching agent
+
+After adding drift markers, `shrutea.lua` runs `llm_coach.py` and prints a labeled **ShruTea says:** verdict in REAPER's console. It sends the hardcoded reference melody and actual drift JSON to Claude when either `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` is configured. The OpenRouter path defaults to a Claude Haiku model and can be overridden with `SHRUTEA_OPENROUTER_MODEL`.
+
+If neither key is configured, ShruTea uses a local, evidence-based fallback verdict so marker analysis remains available offline.
+
 ## Demo visual
 
 Open `demo.html` in a browser for a presentation-ready pitch-drift timeline. It includes sample data immediately and can load a JSON file produced by `drift.py`.
