@@ -3,3 +3,5 @@ __pycache__/
 test_intune.wav
 test_flat.wav
 .env
+.venv*/
+work/
