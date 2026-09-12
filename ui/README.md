@@ -1,12 +1,16 @@
-# ShruTea UI prototype
+# Functional ShruTea local UI
 
-Open `index.html` in a browser to try the interface. It is a front-end prototype: choosing a file and clicking **Steep my feedback** displays illustrative feedback; it does not upload, transcribe, or analyse audio yet.
+This UI runs the repository's real `drift.py` on a WAV selected in the browser. It does not upload audio to a remote service.
 
-## Production integration path
+## Run it
 
-1. Accept only user-owned/licensed audio or video; extract MP4/MOV audio server-side with FFmpeg.
-2. Transcribe vocals with a speech-to-text model, preserve timestamps, then send lyrics plus the chosen musical context to an LLM for concise, singer-friendly coaching. Treat AI feedback as suggestions, never diagnostic claims.
-3. Replace the hard-coded reference in `../drift.py` with time-aligned target notes generated from the selected chord progression or a MIDI guide. Return timestamps, signed cents deviation, confidence, and voiced/unvoiced regions.
-4. Surface pitch, melody, vibrato, lyric/rhyme, and arrangement as separate evidence-backed cards. Let the singer correct a transcript or chord choice before regenerating feedback.
+Install the repository dependencies first, then start the local server from the repository root:
 
-NCS and YouTube links are not automatically safe-to-download sources. The app should accept a source URL only for attribution and require the user to confirm their usage rights before processing any extracted media.
+```bash
+python3 -m pip install -r requirements.txt
+python3 ui/server.py
+```
+
+Open `http://127.0.0.1:8000`, select a rendered WAV, and click **Analyze this take**. The browser sends the WAV to the local server, which calls `drift.py` and renders its returned JSON.
+
+The expected melody remains the hardcoded `REFERENCE_SEQUENCE` in `../drift.py`; edit that before a real session.

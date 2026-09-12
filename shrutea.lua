@@ -7,7 +7,7 @@ local function script_directory()
   return source:match("^@(.+[\\/])") or ""
 end
 
-local DRIFT_SCRIPT = script_directory() .. "drift.py"
+local DRIFT_SCRIPT = os.getenv("SHRUTEA_DRIFT_SCRIPT") or (script_directory() .. "drift.py")
 
 local function shell_quote(value)
   -- Quote a path for the platform shell. The common Lua/Reaper builds use either
@@ -15,7 +15,7 @@ local function shell_quote(value)
   if package.config:sub(1, 1) == "\\" then
     return '"' .. value:gsub('"', '\\"') .. '"'
   end
-  return "'" .. value:gsub("'", "'\\\"'\\\"'") .. "'"
+  return "'" .. value:gsub("'", "'\"'\"'") .. "'"
 end
 
 -- Small, dependency-free JSON decoder for drift.py's JSON output.
@@ -155,7 +155,10 @@ if not selected then
 end
 
 local output_path = os.tmpname() .. ".json"
-local command = "python3 " .. shell_quote(DRIFT_SCRIPT) .. " " .. shell_quote(wav_path) .. " > " .. shell_quote(output_path)
+-- SHRUTEA_PYTHON optionally supplies an absolute interpreter path for hosts
+-- (such as macOS GUI apps) whose PATH does not include Python.
+local python_command = os.getenv("SHRUTEA_PYTHON") or "python3"
+local command = shell_quote(python_command) .. " " .. shell_quote(DRIFT_SCRIPT) .. " " .. shell_quote(wav_path) .. " > " .. shell_quote(output_path)
 local ok = os.execute(command)
 if not (ok == true or ok == 0) then
   os.remove(output_path)
