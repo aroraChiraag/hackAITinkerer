@@ -9,6 +9,17 @@ const summary = document.querySelector('#summary');
 const timeline = document.querySelector('#timeline');
 const markerList = document.querySelector('#marker-list');
 const rawJson = document.querySelector('#raw-json');
+const key = document.querySelector('#key');
+const chords = document.querySelector('#chords');
+const genre = document.querySelector('#genre');
+const vocalStyle = document.querySelector('#vocal-style');
+const feedback = {
+  headline: document.querySelector('#feedback-headline'), summary: document.querySelector('#feedback-summary'),
+  rhymeScheme: document.querySelector('#rhyme-scheme'), rhyme: document.querySelector('#rhyme-feedback'),
+  melody: document.querySelector('#melody-feedback'), vibrato: document.querySelector('#vibrato-feedback'),
+  practice: document.querySelector('#practice-steps'), instruments: document.querySelector('#instrument-recommendations'),
+  transcript: document.querySelector('#transcript'),
+};
 
 audioFile.addEventListener('change', () => {
   const file = audioFile.files[0];
@@ -43,15 +54,24 @@ function render(entries) {
   });
 }
 
+function renderFeedback(transcript, report) {
+  feedback.headline.textContent = report.headline; feedback.summary.textContent = report.summary;
+  feedback.rhymeScheme.textContent = report.rhyme_scheme; feedback.rhyme.textContent = report.rhyme_feedback;
+  feedback.melody.textContent = report.melody_feedback; feedback.vibrato.textContent = report.vibrato_feedback;
+  feedback.transcript.textContent = transcript;
+  feedback.practice.replaceChildren(...report.practice_steps.map(step => { const item = document.createElement('li'); item.textContent = step; return item; }));
+  feedback.instruments.replaceChildren(...report.instrument_recommendations.map(item => { const bullet = document.createElement('li'); bullet.textContent = item; return bullet; }));
+}
+
 analyze.addEventListener('click', async () => {
   const file = audioFile.files[0]; if (!file) return;
-  analyze.disabled = true; analyze.textContent = 'Analyzing…'; status.textContent = 'Running local pitch tracking…';
+  analyze.disabled = true; analyze.textContent = 'Analyzing…'; status.textContent = 'Transcribing with OpenAI and measuring local pitch drift…';
   try {
-    const form = new FormData(); form.append('audio', file);
+    const form = new FormData(); form.append('audio', file); form.append('key', key.value); form.append('chords', chords.value); form.append('genre', genre.value); form.append('vocal_style', vocalStyle.value);
     const response = await fetch('/api/analyze', { method: 'POST', body: form });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || 'Analysis failed.');
-    render(payload.results); status.textContent = 'Analysis complete.'; results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render(payload.results); renderFeedback(payload.transcript, payload.feedback); status.textContent = 'Analysis complete.'; results.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) { status.textContent = `Could not analyze this take: ${error.message}`; }
   finally { analyze.disabled = false; analyze.innerHTML = 'Analyze this take <span>→</span>'; }
 });
