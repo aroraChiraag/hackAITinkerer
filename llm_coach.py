@@ -42,6 +42,32 @@ def _claude_verdict(drift_json: list[dict], reference_sequence: object) -> str:
     return verdict
 
 
+def _openai_verdict(drift_json: list[dict], reference_sequence: object) -> str:
+    """Use the configured OpenAI key for the REAPER console coach."""
+    from openai import OpenAI
+
+    context = json.dumps(
+        {"reference_sequence": reference_sequence, "drift_json": drift_json},
+        separators=(",", ":"),
+    )
+    client = OpenAI(
+        api_key=os.environ["OPENAI_API_KEY"],
+        timeout=5.0,
+        max_retries=0,
+    )
+    response = client.responses.create(
+        model=os.environ.get("SHRUTEA_COACH_MODEL", "gpt-4o-mini"),
+        instructions=SYSTEM_PROMPT,
+        input="Session context: " + context,
+        max_output_tokens=140,
+        store=False,
+    )
+    verdict = response.output_text.strip()
+    if not verdict:
+        raise ValueError("OpenAI returned no text verdict")
+    return verdict
+
+
 def _openrouter_verdict(drift_json: list[dict], reference_sequence: object) -> str:
     """Use OpenRouter credits when a direct Anthropic key is not available."""
     context = json.dumps({"reference_sequence": reference_sequence, "drift_json": drift_json}, separators=(",", ":"))
@@ -75,13 +101,20 @@ def _openrouter_verdict(drift_json: list[dict], reference_sequence: object) -> s
 def coach(drift_json: list[dict], reference_sequence: object) -> str:
     """Return an LLM verdict, falling back within five seconds on any failure."""
     fallback = template_commentary(drift_json, reference_sequence)
+    openai_key = os.environ.get("OPENAI_API_KEY")
     direct_key = os.environ.get("ANTHROPIC_API_KEY")
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-    if not direct_key and not openrouter_key:
+    if not openai_key and not direct_key and not openrouter_key:
         return fallback
     try:
         # Both provider implementations set a five-second client/request timeout.
-        provider = _claude_verdict if direct_key else _openrouter_verdict
+        provider = (
+            _openai_verdict
+            if openai_key
+            else _claude_verdict
+            if direct_key
+            else _openrouter_verdict
+        )
         return provider(drift_json, reference_sequence)
     except Exception:
         return fallback
