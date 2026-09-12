@@ -1,3 +1,57 @@
-const audioFile=document.querySelector('#audio-file');const filename=document.querySelector('#file-name');const analyze=document.querySelector('#analyze');const results=document.querySelector('#results');const lyrics=document.querySelector('#lyrics');const rhymeCopy=document.querySelector('#rhyme-copy');
-audioFile.addEventListener('change',()=>{const file=audioFile.files[0];filename.textContent=file?`${file.name} · ${(file.size/1024/1024).toFixed(1)} MB`:'No file selected';});
-analyze.addEventListener('click',()=>{const text=lyrics.value.trim();if(text){const lines=text.split(/\n+/).filter(Boolean);rhymeCopy.textContent=lines.length>1?`Your opening lines, “${lines[0]}” and “${lines[1]},” give the listener a clear sound relationship. Repeat their strongest vowel on your final note to make the phrase feel connected.`:'Add two or more lyric lines to receive a rhyme and phrasing observation.';}analyze.textContent='Feedback steeped ✓';results.hidden=false;results.scrollIntoView({behavior:'smooth',block:'start'});});
+const audioFile = document.querySelector('#audio-file');
+const filename = document.querySelector('#file-name');
+const analyze = document.querySelector('#analyze');
+const status = document.querySelector('#status');
+const results = document.querySelector('#results');
+const count = document.querySelector('#drift-count');
+const title = document.querySelector('#result-title');
+const summary = document.querySelector('#summary');
+const timeline = document.querySelector('#timeline');
+const markerList = document.querySelector('#marker-list');
+const rawJson = document.querySelector('#raw-json');
+
+audioFile.addEventListener('change', () => {
+  const file = audioFile.files[0];
+  filename.textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : 'No file selected';
+  analyze.disabled = !file;
+  status.textContent = file ? 'Ready to run drift.py locally.' : 'Select a WAV to begin.';
+});
+
+function render(entries) {
+  results.hidden = false;
+  count.textContent = entries.length;
+  rawJson.textContent = JSON.stringify(entries, null, 2);
+  timeline.replaceChildren();
+  markerList.replaceChildren();
+  if (!entries.length) {
+    title.textContent = 'Take is within the 20¢ threshold';
+    summary.textContent = 'No drift markers were returned by drift.py for this rendered take.';
+    markerList.innerHTML = '<article class="marker good"><b>✓</b><div><strong>In tune</strong><small>No reference windows exceeded 20 cents.</small></div></article>';
+    return;
+  }
+  title.textContent = 'Pitch drift markers';
+  const lastTime = Math.max(...entries.map(entry => Number(entry.time)), 0.1);
+  summary.textContent = `${entries.length} reference window${entries.length === 1 ? '' : 's'} exceeded the 20¢ threshold. These are the same events the REAPER script marks on its timeline.`;
+  entries.forEach(entry => {
+    const point = document.createElement('i');
+    point.className = 'warn'; point.style.left = `${8 + 84 * Number(entry.time) / lastTime}%`;
+    point.title = `${entry.expected_note} → ${entry.actual_note}: ${entry.cents_off}¢`;
+    timeline.append(point);
+    const card = document.createElement('article'); card.className = 'marker';
+    card.innerHTML = `<b>${Math.round(Number(entry.cents_off))}¢</b><div><strong>${entry.expected_note} → ${entry.actual_note}</strong><small>${Number(entry.time).toFixed(2)}s · REAPER marker: ${entry.actual_note}: ${Number(entry.cents_off).toFixed(1)} cents off</small></div>`;
+    markerList.append(card);
+  });
+}
+
+analyze.addEventListener('click', async () => {
+  const file = audioFile.files[0]; if (!file) return;
+  analyze.disabled = true; analyze.textContent = 'Analyzing…'; status.textContent = 'Running local pitch tracking…';
+  try {
+    const form = new FormData(); form.append('audio', file);
+    const response = await fetch('/api/analyze', { method: 'POST', body: form });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Analysis failed.');
+    render(payload.results); status.textContent = 'Analysis complete.'; results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) { status.textContent = `Could not analyze this take: ${error.message}`; }
+  finally { analyze.disabled = false; analyze.innerHTML = 'Analyze this take <span>→</span>'; }
+});
