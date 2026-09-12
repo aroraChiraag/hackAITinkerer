@@ -98,6 +98,10 @@ python3 test_drift.py
 ]
 ```
 
+## Demo visual
+
+Open `demo.html` in a browser for a presentation-ready pitch-drift timeline. It includes sample data immediately and can load a JSON file produced by `drift.py`.
+
 ## Sam Changes
 
 This branch contains Sam's documentation and workflow updates for ShruTea.
