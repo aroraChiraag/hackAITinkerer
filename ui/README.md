@@ -10,4 +10,3 @@ Open `index.html` in a browser to try the interface. It is a front-end prototype
 4. Surface pitch, melody, vibrato, lyric/rhyme, and arrangement as separate evidence-backed cards. Let the singer correct a transcript or chord choice before regenerating feedback.
 
 NCS and YouTube links are not automatically safe-to-download sources. The app should accept a source URL only for attribution and require the user to confirm their usage rights before processing any extracted media.
-
