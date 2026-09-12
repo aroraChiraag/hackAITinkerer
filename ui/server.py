@@ -1,55 +1,37 @@
-import cgi
-import json
-import os
-import cgi
+#!/usr/bin/env python3
+"""ShruTea local server: pitch drift plus OpenAI vocal coaching."""
+
+from __future__ import annotations
+
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from openai import OpenAI, OpenAIError
 from dotenv import load_dotenv
+from openai import OpenAI, OpenAIError
+
 UI_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = UI_DIRECTORY.parent
 DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
 load_dotenv(REPOSITORY_ROOT / ".env")
-REPOSITORY_ROOT = UI_DIRECTORY.parent
-DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
-load_dotenv(REPOSITORY_ROOT / ".env")
+
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-TRANSCRIBABLE_SUFFIXES = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
-VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv"}
 MAX_TRANSCRIPTION_BYTES = 24 * 1024 * 1024
-FEEDBACK_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "headline": {"type": "string"},
-        "summary": {"type": "string"},
-        "rhyme_scheme": {"type": "string"},
-        "rhyme_feedback": {"type": "string"},
-        "melody_feedback": {"type": "string"},
-        "vibrato_feedback": {"type": "string"},
-        "practice_steps": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
-        "instrument_recommendations": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4},
-    },
-    "required": ["headline", "summary", "rhyme_scheme", "rhyme_feedback", "melody_feedback", "vibrato_feedback", "practice_steps", "instrument_recommendations"],
-}
+SUPPORTED_SUFFIXES = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".mov", ".mkv", ".ogg", ".wav", ".webm"}
 
 FEEDBACK_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
+    "type": "object", "additionalProperties": False,
     "properties": {
-        "headline": {"type": "string"},
-        "summary": {"type": "string"},
-        "rhyme_scheme": {"type": "string"},
-        "rhyme_feedback": {"type": "string"},
-        "melody_feedback": {"type": "string"},
-        "vibrato_feedback": {"type": "string"},
+        "headline": {"type": "string"}, "summary": {"type": "string"},
+        "rhyme_scheme": {"type": "string"}, "rhyme_feedback": {"type": "string"},
+        "melody_feedback": {"type": "string"}, "vibrato_feedback": {"type": "string"},
         "practice_steps": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
         "instrument_recommendations": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4},
     },
@@ -69,51 +51,61 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    @staticmethod
-    def create_analysis_wav(source_path: Path) -> Path:
-        """Convert non-WAV input to a temporary mono WAV for the local detector."""
-        if source_path.suffix.lower() == ".wav":
-            return source_path
-        converted_path = source_path.with_suffix(".wav")
-        completed = subprocess.run(
-            ["ffmpeg", "-y", "-i", str(source_path), "-vn", "-ac", "1", "-ar", "44100", str(converted_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode:
-            raise ValueError("Audio conversion failed. Install FFmpeg and make sure it is on PATH.")
-        return converted_path
+    def parse_multipart(self, content_length: int) -> tuple[dict[str, str], str, bytes]:
+        """Parse the upload with email/MIME; cgi was removed in Python 3.13."""
+        raw_body = self.rfile.read(content_length)
+        headers = (f"Content-Type: {self.headers['Content-Type']}\r\nMIME-Version: 1.0\r\n\r\n").encode()
+        message = BytesParser(policy=default).parsebytes(headers + raw_body)
+        if not message.is_multipart():
+            raise ValueError("Expected multipart form data.")
+        fields: dict[str, str] = {}
+        filename, audio_bytes = "", b""
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            payload = part.get_payload(decode=True) or b""
+            if name == "audio" and part.get_filename():
+                filename, audio_bytes = part.get_filename(), payload
+            elif not part.get_filename():
+                fields[name] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        if not filename or not audio_bytes:
+            raise ValueError("Choose an audio or video file.")
+        return fields, filename, audio_bytes
 
     @staticmethod
-    def create_transcription_file(source_path: Path) -> Path:
-        """Keep transcription uploads below the API size limit without changing local analysis."""
-        if source_path.stat().st_size <= MAX_TRANSCRIPTION_BYTES:
-            return source_path
-        compressed_path = source_path.with_name(f"{source_path.stem}-transcription.mp3")
-        completed = subprocess.run(
-            ["ffmpeg", "-y", "-i", str(source_path), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", str(compressed_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode or compressed_path.stat().st_size > MAX_TRANSCRIPTION_BYTES:
-            raise ValueError("Could not prepare a transcription-sized audio file. Try a shorter take.")
-        return compressed_path
+    def ffmpeg(arguments: list[str], error: str) -> None:
+        result = subprocess.run(["ffmpeg", "-y", *arguments], capture_output=True, text=True, check=False)
+        if result.returncode:
+            raise ValueError(error)
+
+    @classmethod
+    def analysis_wav(cls, source: Path) -> Path:
+        if source.suffix.lower() == ".wav":
+            return source
+        output = source.with_suffix(".wav")
+        cls.ffmpeg(["-i", str(source), "-vn", "-ac", "1", "-ar", "44100", str(output)], "Audio conversion failed. Install FFmpeg and add it to PATH.")
+        return output
+
+    @classmethod
+    def transcription_file(cls, source: Path) -> Path:
+        if source.stat().st_size <= MAX_TRANSCRIPTION_BYTES:
+            return source
+        output = source.with_name(f"{source.stem}-transcription.mp3")
+        cls.ffmpeg(["-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", str(output)], "Could not prepare a transcription-sized audio file.")
+        if output.stat().st_size > MAX_TRANSCRIPTION_BYTES:
+            raise ValueError("The compressed file is still too large. Try a shorter take.")
+        return output
 
     @staticmethod
-    def create_feedback(transcript: str, drift_results: list[object], key: str, chords: str, genre: str, vocal_style: str) -> dict[str, object]:
-        client = OpenAI()
-        prompt = f"""You are ShruTea, an encouraging vocal coach for a developing singer. Create concise, specific feedback from the evidence below. Never claim you heard pitch, vibrato, or melody beyond the provided drift results and transcript. Treat every recommendation as optional coaching, not medical or professional diagnosis. Explain any uncertain inference plainly.
-
-Musical context: key={key}; chords={chords}; genre={genre}; vocal style={vocal_style}.
-Transcript: {transcript or '[No intelligible lyrics were transcribed]'}
-Measured pitch-drift events from a local detector: {json.dumps(drift_results)}
-
-Give usable technique instructions for melody and vibrato, analyze rhyme from the transcript only, and recommend instruments appropriate to the stated genre and vocal style. Mention chord drift only when detector events exist."""
-        response = client.responses.create(
-            model="gpt-4o-mini",
-            input=prompt,
+    def feedback(transcript: str, drift: list[object], fields: dict[str, str]) -> dict[str, object]:
+        prompt = f"""You are ShruTea, an encouraging vocal coach. Use only the transcript and measured drift events below. Never claim you heard pitch, melody, or vibrato outside this data. Suggestions are optional coaching, not diagnosis.
+Context: key={fields.get('key', 'Not supplied')}; chords={fields.get('chords', 'Not supplied')}; genre={fields.get('genre', 'Not supplied')}; vocal style={fields.get('vocal_style', 'Not supplied')}.
+Transcript: {transcript or '[No intelligible lyrics]'}
+Measured drift events: {json.dumps(drift)}
+Give concise practice advice, analyze rhyme only from the transcript, and recommend instruments for the stated genre/style."""
+        response = OpenAI().responses.create(
+            model="gpt-4o-mini", input=prompt,
             text={"format": {"type": "json_schema", "name": "vocal_feedback", "strict": True, "schema": FEEDBACK_SCHEMA}},
         )
         return json.loads(response.output_text)
@@ -127,64 +119,41 @@ Give usable technique instructions for melody and vibrato, analyze rhyme from th
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose an audio or video file smaller than 100 MB."})
             return
         if not self.headers.get_content_type().startswith("multipart/"):
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Expected a multipart WAV upload."})
-            return
-
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers["Content-Type"], "CONTENT_LENGTH": str(content_length)},
-        )
-        upload = form["audio"] if "audio" in form else None
-        suffix = Path(str(upload.filename or "")).suffix.lower()
-        if upload is None or not getattr(upload, "file", None) or suffix not in TRANSCRIBABLE_SUFFIXES | VIDEO_SUFFIXES:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose WAV, MP3, M4A, MP4, MOV, or another supported audio format."})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Expected a multipart upload."})
             return
         if not os.environ.get("OPENAI_API_KEY"):
-            self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Set OPENAI_API_KEY before requesting transcription and AI coaching."})
+            self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Add OPENAI_API_KEY to .env before analysis."})
             return
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary_file:
-            temporary_path = Path(temporary_file.name)
-            temporary_file.write(upload.file.read())
-        analysis_path = temporary_path
-        transcription_path = temporary_path
+        temporary = analysis = transcription = None
         try:
-            analysis_path = self.create_analysis_wav(temporary_path)
-            transcription_path = self.create_transcription_file(temporary_path)
-            with transcription_path.open("rb") as audio_file:
-                transcript_response = OpenAI().audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=audio_file)
-            transcript = transcript_response.text
-            completed = subprocess.run(
-                [sys.executable, str(DRIFT_SCRIPT), str(analysis_path)],
-                cwd=REPOSITORY_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode:
-                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": completed.stderr.strip() or "drift.py failed."})
+            fields, filename, audio = self.parse_multipart(content_length)
+            suffix = Path(filename).suffix.lower()
+            if suffix not in SUPPORTED_SUFFIXES:
+                raise ValueError("Choose WAV, MP3, M4A, MP4, MOV, or another supported audio format.")
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as file:
+                temporary = Path(file.name)
+                file.write(audio)
+            analysis = self.analysis_wav(temporary)
+            transcription = self.transcription_file(temporary)
+            with transcription.open("rb") as audio_file:
+                transcript = OpenAI().audio.transcriptions.create(model="gpt-4o-mini-transcribe", file=audio_file).text
+            process = subprocess.run([sys.executable, str(DRIFT_SCRIPT), str(analysis)], cwd=REPOSITORY_ROOT, capture_output=True, text=True, check=False)
+            if process.returncode:
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": process.stderr.strip() or "drift.py failed."})
                 return
-            results = json.loads(completed.stdout)
-            if not isinstance(results, list):
+            drift = json.loads(process.stdout)
+            if not isinstance(drift, list):
                 raise ValueError("drift.py did not return a JSON array")
-            feedback = self.create_feedback(
-                transcript=transcript,
-                drift_results=results,
-                key=form.getfirst("key", "Not supplied"),
-                chords=form.getfirst("chords", "Not supplied"),
-                genre=form.getfirst("genre", "Not supplied"),
-                vocal_style=form.getfirst("vocal_style", "Not supplied"),
-            )
-            self.send_json(HTTPStatus.OK, {"results": results, "transcript": transcript, "feedback": feedback})
+            self.send_json(HTTPStatus.OK, {"results": drift, "transcript": transcript, "feedback": self.feedback(transcript, drift, fields)})
         except (OSError, ValueError, json.JSONDecodeError, OpenAIError) as error:
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Analysis failed: {error}"})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"Analysis failed: {error}"})
         finally:
-            temporary_path.unlink(missing_ok=True)
-            if analysis_path != temporary_path:
-                analysis_path.unlink(missing_ok=True)
-            if transcription_path not in {temporary_path, analysis_path}:
-                transcription_path.unlink(missing_ok=True)
+            for path in {temporary, analysis, transcription}:
+                if path:
+                    path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     print("ShruTea UI running at http://127.0.0.1:8000")
     ThreadingHTTPServer(("127.0.0.1", 8000), ShruTeaHandler).serve_forever()
