@@ -139,6 +139,7 @@ Give usable technique instructions for melody and vibrato, analyze rhyme from th
         suffix = Path(str(upload.filename or "")).suffix.lower()
         if upload is None or not getattr(upload, "file", None) or suffix not in TRANSCRIBABLE_SUFFIXES | VIDEO_SUFFIXES:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose WAV, MP3, M4A, MP4, MOV, or another supported audio format."})
+            return
         if not os.environ.get("OPENAI_API_KEY"):
             self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Set OPENAI_API_KEY before requesting transcription and AI coaching."})
             return
@@ -156,9 +157,14 @@ Give usable technique instructions for melody and vibrato, analyze rhyme from th
             transcript = transcript_response.text
             completed = subprocess.run(
                 [sys.executable, str(DRIFT_SCRIPT), str(analysis_path)],
-            results = json.loads(completed.stdout)
-            if not isinstance(results, list):
-                raise ValueError("drift.py did not return a JSON array")
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode:
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": completed.stderr.strip() or "drift.py failed."})
+                return
             results = json.loads(completed.stdout)
             if not isinstance(results, list):
                 raise ValueError("drift.py did not return a JSON array")
