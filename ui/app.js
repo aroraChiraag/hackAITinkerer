@@ -20,14 +20,12 @@ const feedback = {
   practice: document.querySelector('#practice-steps'), instruments: document.querySelector('#instrument-recommendations'),
   transcript: document.querySelector('#transcript'),
 };
-
 audioFile.addEventListener('change', () => {
   const file = audioFile.files[0];
   filename.textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : 'No file selected';
   analyze.disabled = !file;
   status.textContent = file ? 'Ready to run drift.py locally.' : 'Select a WAV to begin.';
 });
-
 function render(entries) {
   results.hidden = false;
   count.textContent = entries.length;
@@ -62,7 +60,6 @@ function renderFeedback(transcript, report) {
   feedback.practice.replaceChildren(...report.practice_steps.map(step => { const item = document.createElement('li'); item.textContent = step; return item; }));
   feedback.instruments.replaceChildren(...report.instrument_recommendations.map(item => { const bullet = document.createElement('li'); bullet.textContent = item; return bullet; }));
 }
-
 analyze.addEventListener('click', async () => {
   const file = audioFile.files[0]; if (!file) return;
   analyze.disabled = true; analyze.textContent = 'Analyzing…'; status.textContent = 'Transcribing with OpenAI and measuring local pitch drift…';

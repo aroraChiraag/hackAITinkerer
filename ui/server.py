@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
-"""ShruTea local server: measured pitch drift plus OpenAI vocal coaching."""
-
-from __future__ import annotations
-
+import cgi
+import json
+import os
 import cgi
 import json
 import os
@@ -15,9 +13,10 @@ from pathlib import Path
 
 from openai import OpenAI, OpenAIError
 from dotenv import load_dotenv
-
-
 UI_DIRECTORY = Path(__file__).resolve().parent
+REPOSITORY_ROOT = UI_DIRECTORY.parent
+DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
+load_dotenv(REPOSITORY_ROOT / ".env")
 REPOSITORY_ROOT = UI_DIRECTORY.parent
 DRIFT_SCRIPT = REPOSITORY_ROOT / "drift.py"
 load_dotenv(REPOSITORY_ROOT / ".env")
@@ -25,6 +24,21 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 TRANSCRIBABLE_SUFFIXES = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv"}
 MAX_TRANSCRIPTION_BYTES = 24 * 1024 * 1024
+FEEDBACK_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "headline": {"type": "string"},
+        "summary": {"type": "string"},
+        "rhyme_scheme": {"type": "string"},
+        "rhyme_feedback": {"type": "string"},
+        "melody_feedback": {"type": "string"},
+        "vibrato_feedback": {"type": "string"},
+        "practice_steps": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
+        "instrument_recommendations": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4},
+    },
+    "required": ["headline", "summary", "rhyme_scheme", "rhyme_feedback", "melody_feedback", "vibrato_feedback", "practice_steps", "instrument_recommendations"],
+}
 
 FEEDBACK_SCHEMA = {
     "type": "object",
@@ -142,14 +156,9 @@ Give usable technique instructions for melody and vibrato, analyze rhyme from th
             transcript = transcript_response.text
             completed = subprocess.run(
                 [sys.executable, str(DRIFT_SCRIPT), str(analysis_path)],
-                cwd=REPOSITORY_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode:
-                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": completed.stderr.strip() or "drift.py failed."})
-                return
+            results = json.loads(completed.stdout)
+            if not isinstance(results, list):
+                raise ValueError("drift.py did not return a JSON array")
             results = json.loads(completed.stdout)
             if not isinstance(results, list):
                 raise ValueError("drift.py did not return a JSON array")
@@ -170,8 +179,6 @@ Give usable technique instructions for melody and vibrato, analyze rhyme from th
                 analysis_path.unlink(missing_ok=True)
             if transcription_path not in {temporary_path, analysis_path}:
                 transcription_path.unlink(missing_ok=True)
-
-
 if __name__ == "__main__":
     print("ShruTea UI running at http://127.0.0.1:8000")
     ThreadingHTTPServer(("127.0.0.1", 8000), ShruTeaHandler).serve_forever()
