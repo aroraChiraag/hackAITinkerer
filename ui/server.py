@@ -10,7 +10,6 @@ the local pitch result.
 
 from __future__ import annotations
 
-import cgi
 import json
 import os
 import shutil
@@ -20,6 +19,8 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -143,6 +144,44 @@ def local_feedback(verdict: str, results: list[dict[str, Any]]) -> dict[str, Any
             "A sustained reference tone for note matching",
             "A dry vocal monitor mix while re-singing the marker",
             "A gentle pad or piano to make the target pitch easy to hear",
+        ],
+    }
+
+
+def mock_feedback(
+    results: list[dict[str, Any]],
+    genre: str,
+    vocal_style: str,
+) -> tuple[str, dict[str, Any]]:
+    """Return clearly-labelled demo coaching when live AI is unavailable."""
+    context = " / ".join(part for part in (genre, vocal_style) if part) or "your vocal style"
+    worst = max(results, key=lambda entry: abs(float(entry["cents_off"])), default=None)
+    landing = (
+        f"The strongest marker is {worst['expected_note']} → {worst['actual_note']} at "
+        f"{float(worst['time']):.2f}s ({float(worst['cents_off']):.0f}¢)."
+        if worst
+        else "No reference window crossed the 20-cent marker threshold."
+    )
+    transcript = (
+        "Demo transcript preview — not transcribed from this take:\n"
+        "“I held my breath, then found my way back home.”"
+    )
+    return transcript, {
+        "headline": "Demo AI vocal-coach preview",
+        "summary": f"{landing} For {context}, keep the phrase supported before adding grit.",
+        "rhyme_scheme": "AABB · demo lyric sample",
+        "rhyme_feedback": "The sample uses matching end sounds to make the hook feel settled. Replace this preview with a live transcript once a valid API key is configured.",
+        "melody_feedback": "Approach the target note cleanly, hold it for two beats, then add the heavier tone on the release.",
+        "vibrato_feedback": "Keep the first beat straight; introduce a light, even vibrato only after the note is centered.",
+        "practice_steps": [
+            "Sing the flagged landing on an open ‘ah’ with a piano reference.",
+            "Repeat the phrase at 70% intensity, keeping the pitch stable before adding grit.",
+            "Record one full-energy pass and compare it with the clean guide take.",
+        ],
+        "instrument_recommendations": [
+            "Palm-muted electric-guitar riff for rhythmic weight",
+            "Sub bass with a tight kick for the hip-hop foundation",
+            "Wide distorted guitar or pad in the hook, leaving space for the vocal",
         ],
     }
 
@@ -368,6 +407,16 @@ def analyze_take(
                 payload["agent_warning"] = f"OpenRouter coaching was unavailable; local drift coaching is still complete. ({error})"
             return payload
         if not os.environ.get("OPENAI_API_KEY"):
+            transcript, feedback = mock_feedback(results, genre, vocal_style)
+            payload.update(
+                {
+                    "transcript": transcript,
+                    "feedback": feedback,
+                    "verdict": feedback["summary"],
+                    "agent_mode": "Demo coach — mock feedback",
+                    "agent_warning": "Demo mode: showing a sample transcript and coaching plan. Add a valid API key later to enable live transcription.",
+                }
+            )
             return payload
         try:
             transcript, feedback = openai_feedback(
@@ -382,7 +431,16 @@ def analyze_take(
                 }
             )
         except (OSError, ValueError, json.JSONDecodeError, OpenAIError, RuntimeError) as error:
-            payload["agent_warning"] = f"OpenAI enhancement was unavailable; local drift coaching is still complete. ({error})"
+            transcript, feedback = mock_feedback(results, genre, vocal_style)
+            payload.update(
+                {
+                    "transcript": transcript,
+                    "feedback": feedback,
+                    "verdict": feedback["summary"],
+                    "agent_mode": "Demo coach — mock feedback",
+                    "agent_warning": "Demo mode: showing a sample transcript and coaching plan. Add a valid API key later to enable live transcription.",
+                }
+            )
         return payload
     finally:
         if analysis_path != source_path:
@@ -400,6 +458,32 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def parse_multipart(self, content_length: int) -> tuple[dict[str, str], str, bytes]:
+        """Parse a multipart browser upload without the removed cgi module."""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/"):
+            raise ValueError("Expected a multipart audio upload.")
+
+        header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n"
+        message = BytesParser(policy=default).parsebytes(
+            header.encode("utf-8") + self.rfile.read(content_length)
+        )
+        fields: dict[str, str] = {}
+        filename = ""
+        audio = b""
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            if name == "audio":
+                filename = part.get_filename() or ""
+                audio = part.get_payload(decode=True) or b""
+            else:
+                fields[name] = part.get_content().strip()
+        return fields, filename, audio
 
     def do_POST(self) -> None:
         if self.path == "/api/demo":
@@ -426,34 +510,28 @@ class ShruTeaHandler(SimpleHTTPRequestHandler):
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Expected a multipart audio upload."})
             return
 
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": self.headers["Content-Type"],
-                "CONTENT_LENGTH": str(content_length),
-            },
-        )
-        upload = form["audio"] if "audio" in form else None
-        filename = str(getattr(upload, "filename", "") or "")
+        try:
+            fields, filename, audio = self.parse_multipart(content_length)
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
         suffix = Path(filename).suffix.lower()
-        if upload is None or not getattr(upload, "file", None) or suffix not in SUPPORTED_INPUT_SUFFIXES:
+        if not audio or suffix not in SUPPORTED_INPUT_SUFFIXES:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose WAV, MP3, M4A, MP4, MOV, or another supported audio format."})
             return
 
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary_file:
             temporary_path = Path(temporary_file.name)
-            temporary_file.write(upload.file.read())
+            temporary_file.write(audio)
         try:
             self.send_json(
                 HTTPStatus.OK,
                 analyze_take(
                     temporary_path,
-                    key=form.getfirst("key", ""),
-                    chords=form.getfirst("chords", ""),
-                    genre=form.getfirst("genre", ""),
-                    vocal_style=form.getfirst("vocal_style", ""),
+                    key=fields.get("key", ""),
+                    chords=fields.get("chords", ""),
+                    genre=fields.get("genre", ""),
+                    vocal_style=fields.get("vocal_style", ""),
                 ),
             )
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
