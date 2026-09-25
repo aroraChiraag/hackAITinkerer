@@ -1,40 +1,77 @@
 # ShruTea
 
-ShruTea is a vocal-pitch agent embedded in REAPER. It compares a rendered vocal take to a fixed reference melody, identifies notes that drift by more than 20 cents, places named markers directly on the project timeline, and gives the producer a concise next action.
+ShruTea is an AI-assisted vocal coach embedded in REAPER. It measures every sung note in a vocal take, drops a named marker on the REAPER timeline wherever pitch drifts more than 20 cents (orange for flat, blue for sharp), and turns that evidence into concrete coaching. A browser companion shows the same analysis with editable extracted lyrics, a practice plan, and genre-aware arrangement ideas.
 
-It is designed for a monophonic vocal demo clip, not chord detection or full-song transcription.
+It is designed for a monophonic vocal line, not chord detection or full-song transcription.
+
+## Who it's for
+
+Producers, composers, rap artists, singers, and sound engineers. With ShruTea at their disposal, every session starts from real evidence about the vocal instead of guesswork, and we can guarantee certified bangers.
+
+## Where ShruTea can go
+
+- **Streaming platforms:** Spotify could offer ShruTea as a coaching service to its signed artists, helping them sharpen their vocals before release.
+- **DAW plugin:** as a plugin for Audacity or Ableton Live, ShruTea shows exactly which notes drift and by how much, so artists can apply Melodyne or Auto-Tune in an informed way instead of flattening the whole performance.
+- **Music labels:** labels such as Warner Music or Def Jam could offer ShruTea as a vocal trainer to their artists, a game changer for developing talent at scale.
+
+These are opportunities we see for ShruTea, not existing partnerships. All product and company names are trademarks of their respective owners.
 
 ## How it works
 
-1. Render a vocal take to WAV from REAPER.
-2. Run shrutea.lua and select that WAV.
-3. The ReaScript runs drift.py as a Python subprocess.
-4. drift.py uses librosa pYIN to estimate pitch and compares each reference-note window to its intended frequency.
-5. Notes beyond the 20-cent threshold become project markers. ShruTea then prints a labeled coaching verdict in REAPER's console.
+1. drift.py uses librosa's pYIN to track pitch, refined with YIN for cent-level precision.
+2. In **auto mode** (default) it splits the take into sung notes and measures each one against its nearest semitone, so any melody works without setup. In **reference mode** it compares windows of a fixed REFERENCE_SEQUENCE instead.
+3. Notes beyond 20 cents become JSON events: time, note, cents off, and whether the note was flat or sharp.
+4. shrutea.lua turns those events into REAPER markers, then llm_coach.py prints a **ShruTea says:** verdict in the REAPER console.
+5. ui/server.py runs the same detector for the web companion, extracts lyrics with a local Whisper model, and with an OpenAI or Anthropic key adds structured AI coaching.
 
-## Requirements
+The first 20 seconds of a take are analyzed (8 seconds in the web UI) so a live demo never stalls.
 
-- REAPER with ReaScript/Lua support
-- Python 3.11 or newer
-- Python packages declared in requirements.txt
+## Setup
 
-Install dependencies:
+Requires Python 3.11+ (3.13 works). Create a virtual environment in the repository folder; shrutea.lua finds `.venv` automatically.
+
+Windows:
 
 ~~~bash
-python3 -m pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
 ~~~
 
-## Configure the reference melody
+macOS / Linux:
 
-Edit REFERENCE_SEQUENCE in drift.py before analyzing a take. Each tuple contains:
+~~~bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+~~~
 
-    (start_time_in_seconds, expected_note_name, expected_frequency_hz)
+Optional: copy `.env.example` to `.env` and add an API key. The first key set is used, in this order: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`. Without a key, everything still runs with local coaching.
 
-The supplied demo uses A4 from the start:
+## Use it in REAPER
 
-    REFERENCE_SEQUENCE = ((0.0, "A4", 440.0),)
+1. In REAPER, open **Actions > Show Action List > New Action > Load ReaScript** and select `shrutea.lua` from this folder. Keep the script in this folder so it can find drift.py, llm_coach.py, `.venv`, and `.env`.
+2. Select the vocal item on the timeline and run the ShruTea action. Markers land on the item's own position.
+3. With no item selected, ShruTea opens a file picker for a rendered WAV and places markers relative to the project start.
+4. Read the verdict in the ReaScript console. Re-running replaces earlier ShruTea markers (your own markers are untouched), and the whole change is one undo step.
 
-For a multi-note demo, add entries in chronological order. A note stays active until the following entry:
+Environment overrides: `SHRUTEA_PYTHON` (interpreter path), `SHRUTEA_MODE` (`auto` or `reference`), `SHRUTEA_DRIFT_SCRIPT`, `SHRUTEA_COACH_SCRIPT`.
+
+## Run the web companion
+
+~~~bash
+.venv\Scripts\python ui\server.py
+~~~
+
+(`.venv/bin/python ui/server.py` on macOS / Linux.) Open http://127.0.0.1:8000 and click **Try the included REAPER take**, or upload a take and click **Analyze this take**. WAV works out of the box; MP3, M4A, and video need FFmpeg on PATH.
+
+- **Extracted Lyrics:** a local Whisper model (`faster-whisper`, `small` by default; downloaded once on first start) transcribes the first 60 seconds, so audio never leaves your machine. With `ANTHROPIC_API_KEY`, non-English lyrics are transliterated to Roman script (for example Hinglish); set `SHRUTEA_LYRICS_SCRIPT=original` to keep the original script. The lyrics box is editable: fix any misheard words and click **Update coaching with these lyrics**. Tune with `SHRUTEA_WHISPER_MODEL` (`base` is faster) and `SHRUTEA_LYRICS_SECONDS`.
+- **With `OPENAI_API_KEY`:** the Responses API returns structured coaching (melody, vibrato, rhyme, practice steps, arrangement ideas) grounded in the lyrics, the musical context you enter, and the measured drift. If the call fails, the page says why and shows local coaching.
+- **With `ANTHROPIC_API_KEY`:** Claude (`claude-opus-5` by default, set `SHRUTEA_CLAUDE_MODEL` to change) writes the same structured coaching card. If Claude's safety filter declines a request, the API automatically re-runs it on a fallback model.
+- **With only `OPENROUTER_API_KEY`:** a one-line live verdict on top of local coaching.
+- **With no key:** real pitch markers plus a clearly labelled sample coaching plan.
+
+## Reference mode
+
+To compare against an intended melody instead of the nearest semitone, edit REFERENCE_SEQUENCE in drift.py and run with `--mode reference` (or set `SHRUTEA_MODE=reference` for REAPER). Each entry is `(start_time_in_seconds, note_name, frequency_hz)` and stays active until the next one:
 
     REFERENCE_SEQUENCE = (
         (0.0, "A4", 440.0),
@@ -42,56 +79,26 @@ For a multi-note demo, add entries in chronological order. A note stays active u
         (3.0, "A4", 440.0),
     )
 
-## Install in REAPER
-
-1. Copy shrutea.lua, drift.py, llm_coach.py, and commentary.py into REAPER's Scripts folder, or leave them in this repository and load the Lua file here.
-2. In REAPER, open **Actions > Show Action List**.
-3. Choose **New Action > Load ReaScript** and select shrutea.lua.
-4. Render or bounce the vocal take to WAV.
-5. Find shrutea.lua in the Action List and click **Run**.
-6. Select the rendered WAV in REAPER's file picker.
-7. Inspect the named markers on the project timeline and the REAPER console.
-
-If REAPER cannot find Python, set SHRUTEA_PYTHON to the absolute interpreter path reported by:
-
-~~~bash
-which python3
-~~~
-
-## Embedded coaching agent
-
-After adding drift markers, shrutea.lua runs llm_coach.py and prints a labeled **ShruTea says:** verdict in REAPER's console. The coach receives the intended reference melody and measured drift JSON, then prefers OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY, in that order.
-
-If no key is configured, ShruTea uses a local, evidence-based fallback verdict so marker analysis remains available offline.
-
-## Run the web companion
-
-The browser companion is a functional view of the same REAPER workflow: it calls the real local drift.py, shows marker timing and reference context, then renders a coaching verdict, practice plan, transcript, and raw JSON. Its **Try the included REAPER take** button exercises the full result workspace without a manual upload.
-
-~~~bash
-python3 -m pip install -r requirements.txt
-cp .env.example .env  # optional: add OPENAI_API_KEY for transcription and structured coaching
-python3 ui/server.py
-~~~
-
-Open http://127.0.0.1:8000. WAV works with no further setup; MP3, M4A, and video inputs require FFmpeg. The UI analyzes only the first eight seconds, and drift.py caps all analyses at twenty seconds so a long render cannot stall a live demo.
-
-With OPENAI_API_KEY, ShruTea sends a temporary eight-second WAV excerpt to OpenAI for transcription and asks the Responses API for structured coaching. If the key or network is unavailable, the local pitch result and all UI cards still render using a deterministic evidence-based fallback.
-
 ## Tests
 
-Run the pitch threshold tests:
-
 ~~~bash
-python3 test_drift.py
+.venv\Scripts\python test_drift.py
 ~~~
 
-They generate a 440 Hz A4 tone, which must produce an empty JSON list, and a 427 Hz tone, which must produce the A4 to G#4 drift event at roughly 50 cents.
+Generates tones and checks both modes: in-tune notes are ignored, 427 Hz reads as A4 → G#4 about 52 cents flat, 432 Hz as A4 about 32 cents flat, and a sharp second note is found at the right time.
 
-To verify the Lua-to-Python-to-REAPER flow without opening REAPER:
+To run the real shrutea.lua against a mock REAPER (markers, item offsets, re-run cleanup, and coaching output) with any Lua 5.3+ interpreter:
 
 ~~~bash
 lua test_shrutea.lua
 ~~~
 
-The mock test generates a temporary flat tone, loads mock_reaper.lua, runs the real shrutea.lua, and asserts that the Python subprocess, JSON parser, marker call, and coaching console output all succeed.
+No Lua installed? `.venv\Scripts\python -m pip install lupa`, then:
+
+~~~bash
+.venv\Scripts\python -c "import lupa; lupa.LuaRuntime().execute('dofile([[test_shrutea.lua]])')"
+~~~
+
+## Acknowledgements
+
+A big thank you to CREWASIS and Hackathon 1.0 for making ShruTea possible.

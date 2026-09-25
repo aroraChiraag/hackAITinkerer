@@ -1,22 +1,71 @@
 -- shrutea.lua
--- Analyze a rendered vocal WAV with drift.py and mark notes that are out of tune.
--- Keep drift.py next to this script (or change DRIFT_SCRIPT below).
+-- Analyze a vocal take with drift.py and mark notes that are out of tune.
+-- Select the vocal item before running to analyze it in place; otherwise a
+-- file picker asks for a rendered WAV that starts at the project start.
+-- Keep drift.py, llm_coach.py, and commentary.py next to this script.
+
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+local MARKER_PREFIX = "ShruTea: "
 
 local function script_directory()
   local source = debug.getinfo(1, "S").source
   return source:match("^@(.+[\\/])") or ""
 end
 
-local DRIFT_SCRIPT = os.getenv("SHRUTEA_DRIFT_SCRIPT") or (script_directory() .. "drift.py")
-local COACH_SCRIPT = os.getenv("SHRUTEA_COACH_SCRIPT") or (script_directory() .. "llm_coach.py")
+local function file_exists(path)
+  local handle = io.open(path, "r")
+  if handle then handle:close() end
+  return handle ~= nil
+end
+
+local SCRIPT_DIR = script_directory()
+local DRIFT_SCRIPT = os.getenv("SHRUTEA_DRIFT_SCRIPT") or (SCRIPT_DIR .. "drift.py")
+local COACH_SCRIPT = os.getenv("SHRUTEA_COACH_SCRIPT") or (SCRIPT_DIR .. "llm_coach.py")
+-- "auto" measures each sung note against its nearest semitone; "reference"
+-- compares against REFERENCE_SEQUENCE in drift.py.
+local MODE = os.getenv("SHRUTEA_MODE") or "auto"
+
+-- Prefer SHRUTEA_PYTHON, then a .venv next to this script, then PATH. GUI
+-- hosts such as REAPER often lack the terminal's PATH and environment.
+local function find_python()
+  local configured = os.getenv("SHRUTEA_PYTHON")
+  if configured and configured ~= "" then return configured end
+  local venv_python = SCRIPT_DIR .. (IS_WINDOWS and ".venv\\Scripts\\python.exe" or ".venv/bin/python")
+  if file_exists(venv_python) then return venv_python end
+  return IS_WINDOWS and "python" or "python3"
+end
+
+local function temp_path(suffix)
+  if IS_WINDOWS then
+    -- os.tmpname() can point at the drive root on Windows, which is not writable.
+    local directory = os.getenv("TEMP") or os.getenv("TMP") or "."
+    return string.format("%s\\shrutea_%d_%d%s", directory, os.time(), math.random(1, 1000000000), suffix)
+  end
+  return os.tmpname() .. suffix
+end
 
 local function shell_quote(value)
-  -- Quote a path for the platform shell. The common Lua/Reaper builds use either
-  -- Windows cmd.exe or a POSIX shell.
-  if package.config:sub(1, 1) == "\\" then
+  -- Quote a path for the platform shell: Windows cmd.exe or a POSIX shell.
+  if IS_WINDOWS then
     return '"' .. value:gsub('"', '\\"') .. '"'
   end
   return "'" .. value:gsub("'", "'\"'\"'") .. "'"
+end
+
+local function run(command)
+  -- cmd.exe /c strips the first and last quote of a command that starts with
+  -- one, so wrap the whole command in an extra pair of quotes on Windows.
+  if IS_WINDOWS then command = '"' .. command .. '"' end
+  local ok = os.execute(command)
+  return ok == true or ok == 0
+end
+
+local function read_file(path)
+  local handle = io.open(path, "r")
+  if not handle then return nil end
+  local text = handle:read("*a")
+  handle:close()
+  return text
 end
 
 -- Small, dependency-free JSON decoder for drift.py's JSON output.
@@ -148,38 +197,71 @@ local function console(message)
   reaper.ShowConsoleMsg(message .. "\n")
 end
 
--- GetUserFileNameForRead opens REAPER's file picker and returns the chosen WAV path.
-local selected, wav_path = reaper.GetUserFileNameForRead("", "Select rendered vocal WAV", ".wav")
-if not selected then
-  console("Shrutea: cancelled.")
+-- Returns the WAV path, the project time that the file's 0s maps to, and the
+-- item span (if any) that markers must fall inside.
+local function choose_take()
+  local item = reaper.GetSelectedMediaItem and reaper.GetSelectedMediaItem(0, 0)
+  local take = item and reaper.GetActiveTake(item)
+  if take and not reaper.TakeIsMIDI(take) then
+    local source = reaper.GetMediaItemTake_Source(take)
+    local path = source and reaper.GetMediaSourceFileName(source, "")
+    if path and path ~= "" then
+      local position = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+      local length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+      local start_offset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+      return path, position - start_offset, position, position + length
+    end
+  end
+  -- GetUserFileNameForRead opens REAPER's file picker and returns the chosen WAV path.
+  local selected, path = reaper.GetUserFileNameForRead("", "Select rendered vocal WAV", ".wav")
+  if not selected then return nil end
+  return path, 0, nil, nil
+end
+
+-- Remove markers left by an earlier ShruTea run so re-analysis never duplicates them.
+local function clear_previous_markers()
+  local _, marker_count, region_count = reaper.CountProjectMarkers(0)
+  for index = marker_count + region_count - 1, 0, -1 do
+    local _, is_region, _, _, name, number = reaper.EnumProjectMarkers(index)
+    if not is_region and name:sub(1, #MARKER_PREFIX) == MARKER_PREFIX then
+      reaper.DeleteProjectMarker(0, number, false)
+    end
+  end
+end
+
+-- Flat notes are orange and sharp notes blue; 0x1000000 marks the colour as custom.
+local function marker_color(direction)
+  if direction == "sharp" then return reaper.ColorToNative(70, 130, 220) | 0x1000000 end
+  return reaper.ColorToNative(216, 108, 61) | 0x1000000
+end
+
+local wav_path, file_start, item_start, item_end = choose_take()
+if not wav_path then
+  console("ShruTea: cancelled.")
   return
 end
 
-local output_path = os.tmpname() .. ".json"
--- SHRUTEA_PYTHON optionally supplies an absolute interpreter path for hosts
--- (such as macOS GUI apps) whose PATH does not include Python.
-local python_command = os.getenv("SHRUTEA_PYTHON") or "python3"
-local command = shell_quote(python_command) .. " " .. shell_quote(DRIFT_SCRIPT) .. " " .. shell_quote(wav_path) .. " > " .. shell_quote(output_path)
-local ok = os.execute(command)
-if not (ok == true or ok == 0) then
+local python = find_python()
+local output_path = temp_path(".json")
+local error_path = temp_path(".log")
+local command = shell_quote(python) .. " " .. shell_quote(DRIFT_SCRIPT) .. " " .. shell_quote(wav_path)
+  .. " --mode " .. MODE .. " > " .. shell_quote(output_path) .. " 2> " .. shell_quote(error_path)
+console("ShruTea: analyzing " .. wav_path .. " (" .. MODE .. " mode)...")
+local ok = run(command)
+local json_text = read_file(output_path)
+local error_text = read_file(error_path) or ""
+os.remove(error_path)
+if not ok or not json_text or not json_text:match("%S") then
   os.remove(output_path)
-  console("Shrutea: drift.py failed. Confirm Python 3 and " .. DRIFT_SCRIPT .. " are available.")
-  return
-end
-
-local file = io.open(output_path, "r")
-local json_text = file and file:read("*a")
-if file then file:close() end
-if not json_text or json_text == "" then
-  os.remove(output_path)
-  console("Shrutea: drift.py produced no JSON output.")
+  console("ShruTea: drift.py failed using Python '" .. python .. "'. Set SHRUTEA_PYTHON or create .venv next to shrutea.lua.")
+  if error_text:match("%S") then console(error_text) end
   return
 end
 
 local decoded_ok, results = pcall(decode_json, json_text)
 if not decoded_ok then
   os.remove(output_path)
-  console("Shrutea: could not parse drift.py JSON: " .. tostring(results))
+  console("ShruTea: could not parse drift.py JSON: " .. tostring(results))
   return
 end
 
@@ -187,37 +269,45 @@ end
 local entries = type(results) == "table" and (results.entries or results.results or results)
 if type(entries) ~= "table" then
   os.remove(output_path)
-  console("Shrutea: JSON must contain an array of pitch entries.")
+  console("ShruTea: JSON must contain an array of pitch entries.")
   return
 end
 
+reaper.Undo_BeginBlock()
+clear_previous_markers()
 local markers_added = 0
 for _, entry in ipairs(entries) do
   local cents_off = tonumber(entry.cents_off)
   local timestamp = tonumber(entry.timestamp or entry.time or entry.time_seconds)
-  local note_name = entry.actual_note or entry.expected_note or entry.note_name or entry.note or "Unknown note"
-  if cents_off and timestamp and cents_off > 20 then
-    local label = string.format("%s: %.1f cents off", tostring(note_name), cents_off)
-    -- AddProjectMarker2 adds a non-region marker to the current project at timestamp.
-    reaper.AddProjectMarker2(0, false, timestamp, 0, label, -1, 0)
-    markers_added = markers_added + 1
+  if cents_off and timestamp then
+    local position = file_start + timestamp
+    if not item_start or (position >= item_start and position < item_end) then
+      local expected = entry.expected_note or entry.note or "?"
+      local actual = entry.actual_note or expected
+      local note_name = actual ~= expected and (expected .. " -> " .. actual) or expected
+      local label = string.format("%s%s: %.1f cents %s", MARKER_PREFIX, note_name, cents_off, entry.direction or "off")
+      -- AddProjectMarker2 adds a non-region marker to the current project.
+      reaper.AddProjectMarker2(0, false, position, 0, label, -1, marker_color(entry.direction))
+      markers_added = markers_added + 1
+    end
   end
 end
+reaper.Undo_EndBlock("ShruTea: mark pitch drift", -1)
+reaper.UpdateArrange()
 
-console(string.format("Shrutea: added %d marker(s) for notes more than 20 cents off.", markers_added))
+console(string.format("ShruTea: added %d marker(s) for notes more than 20 cents off.", markers_added))
 
 -- Run the context-aware coach after markers are added, then print its verdict
--- in REAPER's console. llm_coach.py uses Claude when ANTHROPIC_API_KEY is set
--- and otherwise returns a reliable local template verdict.
-local coach_output_path = os.tmpname() .. ".txt"
-local coach_command = shell_quote(python_command) .. " " .. shell_quote(COACH_SCRIPT) .. " " .. shell_quote(output_path) .. " > " .. shell_quote(coach_output_path)
-local coach_ok = os.execute(coach_command)
-local coach_file = io.open(coach_output_path, "r")
-local verdict = coach_file and coach_file:read("*a") or nil
-if coach_file then coach_file:close() end
+-- in REAPER's console. llm_coach.py reads API keys from .env and otherwise
+-- returns a reliable local template verdict.
+local coach_output_path = temp_path(".txt")
+local coach_command = shell_quote(python) .. " " .. shell_quote(COACH_SCRIPT) .. " " .. shell_quote(output_path)
+  .. " --mode " .. MODE .. " > " .. shell_quote(coach_output_path)
+local coach_ok = run(coach_command)
+local verdict = read_file(coach_output_path)
 os.remove(output_path)
 os.remove(coach_output_path)
-if (coach_ok == true or coach_ok == 0) and verdict and verdict:match("%S") then
+if coach_ok and verdict and verdict:match("%S") then
   console("ShruTea says: " .. verdict:gsub("%s+$", ""))
 else
   console("ShruTea says: Pitch analysis is complete; coaching verdict unavailable.")

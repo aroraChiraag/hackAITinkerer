@@ -15,18 +15,25 @@ from scipy.io import wavfile
 ROOT = Path(__file__).resolve().parent
 SAMPLE_RATE = 44_100
 DURATION_SECONDS = 3
-REQUIRED_KEYS = {"time", "expected_note", "actual_note", "cents_off"}
+REQUIRED_KEYS = {"time", "duration", "expected_note", "actual_note", "cents_off", "direction"}
+
+
+def tone(frequency: float, seconds: float) -> np.ndarray:
+    time = np.arange(int(SAMPLE_RATE * seconds)) / SAMPLE_RATE
+    return 0.5 * np.sin(2 * np.pi * frequency * time)
+
+
+def write_samples(path: Path, samples: np.ndarray) -> None:
+    wavfile.write(path, SAMPLE_RATE, (samples * np.iinfo(np.int16).max).astype(np.int16))
 
 
 def write_tone(path: Path, frequency: float) -> None:
-    time = np.arange(SAMPLE_RATE * DURATION_SECONDS) / SAMPLE_RATE
-    samples = (0.5 * np.sin(2 * np.pi * frequency * time) * np.iinfo(np.int16).max).astype(np.int16)
-    wavfile.write(path, SAMPLE_RATE, samples)
+    write_samples(path, tone(frequency, DURATION_SECONDS))
 
 
-def run_drift(wav_path: Path) -> list[dict[str, float | str]]:
+def run_drift(wav_path: Path, mode: str) -> list[dict[str, float | str]]:
     completed = subprocess.run(
-        [sys.executable, str(ROOT / "drift.py"), str(wav_path)],
+        [sys.executable, str(ROOT / "drift.py"), str(wav_path), "--mode", mode],
         check=True,
         capture_output=True,
         text=True,
@@ -38,29 +45,50 @@ def run_drift(wav_path: Path) -> list[dict[str, float | str]]:
 
 
 def main() -> None:
-    intune_wav = ROOT / "test_intune.wav"
-    flat_wav = ROOT / "test_flat.wav"
-    write_tone(intune_wav, 440.0)
-    write_tone(flat_wav, 427.0)
+    fixtures = {
+        "intune": (ROOT / "test_intune.wav", tone(440.0, DURATION_SECONDS)),
+        "flat": (ROOT / "test_flat.wav", tone(427.0, DURATION_SECONDS)),
+        "slightly_flat": (ROOT / "test_slightly_flat.wav", tone(432.0, DURATION_SECONDS)),
+        # In-tune A4, a short silence, then A4 sung 47 cents sharp.
+        "two_notes": (
+            ROOT / "test_two_notes.wav",
+            np.concatenate([tone(440.0, 1.5), np.zeros(SAMPLE_RATE // 4), tone(452.0, 1.25)]),
+        ),
+    }
+    for path, samples in fixtures.values():
+        write_samples(path, samples)
 
     try:
-        intune_output = run_drift(intune_wav)
-        flat_output = run_drift(flat_wav)
+        outputs = {}
+        for mode in ("reference", "auto"):
+            for name, (path, _) in fixtures.items():
+                outputs[mode, name] = run_drift(path, mode)
 
-        assert intune_output == [], f"440 Hz should be filtered out: {intune_output}"
-        assert flat_output, "427 Hz should produce drift entries"
-        assert all(entry["expected_note"] == "A4" for entry in flat_output), flat_output
-        assert all(entry["actual_note"] == "G#4" for entry in flat_output), flat_output
-        assert all(50 <= float(entry["cents_off"]) <= 54 for entry in flat_output), flat_output
+        # Reference mode compares against REFERENCE_SEQUENCE (a single A4).
+        assert outputs["reference", "intune"] == [], outputs["reference", "intune"]
+        flat = outputs["reference", "flat"]
+        assert len(flat) == 1, flat
+        assert flat[0]["expected_note"] == "A4" and flat[0]["actual_note"] == "G#4", flat
+        assert 50 <= float(flat[0]["cents_off"]) <= 54 and flat[0]["direction"] == "flat", flat
 
-        print("test_intune.wav JSON:")
-        print(json.dumps(intune_output, indent=2))
-        print("test_flat.wav JSON:")
-        print(json.dumps(flat_output, indent=2))
-        print("Assertions passed: intune filtered; flat drift detected.")
+        # Auto mode measures each sung note against its nearest semitone.
+        assert outputs["auto", "intune"] == [], outputs["auto", "intune"]
+        slightly_flat = outputs["auto", "slightly_flat"]
+        assert len(slightly_flat) == 1, slightly_flat
+        assert slightly_flat[0]["expected_note"] == "A4" and slightly_flat[0]["direction"] == "flat", slightly_flat
+        assert 29 <= float(slightly_flat[0]["cents_off"]) <= 34, slightly_flat
+        two_notes = outputs["auto", "two_notes"]
+        assert len(two_notes) == 1, two_notes
+        assert 1.6 <= float(two_notes[0]["time"]) <= 1.9, two_notes
+        assert two_notes[0]["expected_note"] == "A4" and two_notes[0]["direction"] == "sharp", two_notes
+        assert 44 <= float(two_notes[0]["cents_off"]) <= 50, two_notes
+
+        for (mode, name), output in outputs.items():
+            print(f"{mode:9} {name:13} {json.dumps(output)}")
+        print("Assertions passed: reference and auto modes flag drift and ignore in-tune notes.")
     finally:
-        intune_wav.unlink(missing_ok=True)
-        flat_wav.unlink(missing_ok=True)
+        for path, _ in fixtures.values():
+            path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

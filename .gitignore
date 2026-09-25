@@ -1,7 +1,6 @@
 __pycache__/
 *.py[cod]
-test_intune.wav
-test_flat.wav
+test_*.wav
 .env
 .venv*/
 work/

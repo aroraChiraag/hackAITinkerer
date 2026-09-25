@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ShruTea — REAPER Vocal Coach</title>
+  <title>ShruTea — Vocal Coach</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <main>
     <nav>
       <img src="logo.svg" alt="ShruTea">
-      <span class="beta">REAPER AGENT</span>
-      <span class="nav-note">Pitch context → timeline action</span>
+      <span class="beta">STUDIO VOCAL COACH</span>
+      <span class="nav-note">Sing it · mark it · nail it</span>
     </nav>
 
     <section class="hero">
       <p class="eyebrow">EMBEDDED VOCAL INTELLIGENCE</p>
       <h1>Hear the drift.<br><em>Mark the take.</em></h1>
-      <p class="intro">ShruTea compares a rendered vocal to its intended melody, creates actionable REAPER markers, and turns the exact drift evidence into a focused coaching plan.</p>
+      <p class="intro">ShruTea listens to your vocal take, finds every note that slips off pitch, and pins a marker on your session timeline so you can jump straight to it. Then it coaches you on how to nail it.</p>
     </section>
 
     <section class="workspace" aria-label="ShruTea vocal-analysis workspace">
@@ -28,10 +28,10 @@
           <input id="audio-file" type="file" accept="audio/*,video/mp4,video/quicktime">
           <span class="upload-icon">↑</span>
           <strong>Choose a rendered take</strong>
-          <small>WAV works instantly · MP3/video needs FFmpeg · max 100 MB</small>
+          <small>WAV, MP3, or video · up to 100 MB</small>
         </label>
         <div id="file-name" class="file-name" aria-live="polite">No file selected</div>
-        <button id="demo" class="secondary">Try the included REAPER take <span>↗</span></button>
+        <button id="demo" class="secondary">Try a sample vocal <span>↗</span></button>
       </div>
 
       <div class="step-card setup-card">
@@ -43,19 +43,19 @@
         </div>
         <label>Chord progression <input id="chords" value="Am · F · C · G"></label>
         <label>Vocal style <input id="vocal-style" value="Heavy / gritty"></label>
-        <p class="context">ShruTea runs locally using <code>drift.py</code>: it reads the intended melody, measures pitch drift, builds a coaching plan, and sends named actions to REAPER. No API key is needed.</p>
+        <p class="context">Your pitch is checked right here on your computer. Add a key and genre so the coaching fits your song.</p>
         <button id="analyze" class="primary" disabled>Analyze this take <span>→</span></button>
-        <p id="status" class="status" aria-live="polite">Select a WAV or try the included demo take.</p>
+        <p id="status" class="status" aria-live="polite">Choose a recording or try the sample vocal.</p>
       </div>
     </section>
 
     <section id="results" class="results" hidden aria-live="polite">
       <div class="results-heading">
         <div>
-          <p class="eyebrow">REAL ANALYSIS RESULT</p>
-          <h2 id="result-title">Pitch drift markers</h2>
+          <p class="eyebrow">YOUR RESULTS</p>
+          <h2 id="result-title">Notes to revisit</h2>
         </div>
-        <span class="score"><b id="drift-count">0</b><small>markers</small></span>
+        <span class="score"><b id="drift-count">0</b><small>notes</small></span>
       </div>
 
       <div class="result-grid">
@@ -68,21 +68,21 @@
 
         <article class="card context-card">
           <p class="card-label">SESSION CONTEXT</p>
-          <h3>Reference melody</h3>
-          <p>The agent reads the intended note sequence with the detected pitch; it does not judge audio in isolation.</p>
+          <h3>How your pitch is checked</h3>
+          <p>ShruTea listens to each note you sing and checks how close it lands to the true note. No sheet music or setup needed.</p>
           <div id="reference-notes" class="note-chips"></div>
         </article>
 
         <article class="card drift">
-          <p class="card-label">TIMELINE MARKERS</p>
+          <p class="card-label">WHERE IN YOUR TAKE</p>
           <div id="timeline" class="timeline"></div>
           <p id="summary"></p>
         </article>
 
         <article class="card reaper-card">
-          <p class="card-label">REAPER ACTION</p>
+          <p class="card-label">ON YOUR TIMELINE</p>
           <h3>Markers, not mystery.</h3>
-          <p>Each flagged note becomes a named marker on the current REAPER project timeline, so a producer can jump straight to the phrase that needs attention.</p>
+          <p>Each off-pitch note gets a marker in your session, so you can jump straight to the line that needs another take.</p>
           <div id="reaper-plan" class="tag">No markers yet</div>
         </article>
       </div>
@@ -103,8 +103,16 @@
         <ul id="instrument-recommendations"></ul>
       </article>
 
-      <details class="raw"><summary>Transcript</summary><pre id="transcript"></pre></details>
-      <details class="raw"><summary>View raw drift.py JSON</summary><pre id="raw-json"></pre></details>
+      <article class="card lyrics-card">
+        <p class="card-label">EXTRACTED LYRICS</p>
+        <h3>Extracted Lyrics</h3>
+        <p id="lyrics-note" class="lyrics-note"></p>
+        <textarea id="lyrics" rows="10" spellcheck="false" aria-label="Extracted lyrics, editable" placeholder="No lyrics were extracted. Type or paste your lyrics here."></textarea>
+        <div class="lyrics-actions">
+          <button id="recoach" class="primary" disabled>Update coaching with these lyrics <span>↻</span></button>
+          <span id="lyrics-status" class="lyrics-status" aria-live="polite"></span>
+        </div>
+      </article>
     </section>
   </main>
   <footer>ShruTea uses local pitch measurements and optional AI coaching. It is a focused studio aid, not a substitute for a vocal teacher or hearing professional.</footer>
